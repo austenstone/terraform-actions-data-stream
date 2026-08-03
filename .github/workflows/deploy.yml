@@ -1,0 +1,279 @@
+name: Deploy
+
+# Provisions the cloud side and, optionally, registers the sink with GitHub.
+#
+# Cloud auth is OIDC, which is the same trust pattern the data stream itself uses:
+# a short-lived token from GitHub, exchanged for cloud credentials, no stored keys.
+# The only thing that can be a real secret here is the GitHub token used to create
+# the sink, and that step is optional.
+#
+# Required repository variables:
+#   GH_OWNER_ID           numeric org or enterprise ID (the subject claim depends on it)
+#   Azure: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#   AWS:   AWS_ROLE_ARN, AWS_REGION
+#
+# See the workflow section of README.md for the full variable list.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Which example to deploy
+        type: choice
+        required: true
+        options:
+          - azure-kusto
+          - azure-blob
+          - aws-s3
+      action:
+        description: plan is safe, apply and destroy are not
+        type: choice
+        required: true
+        default: plan
+        options:
+          - plan
+          - apply
+          - destroy
+      create_sink:
+        description: Register the sink with GitHub after apply (needs DATA_STREAM_TOKEN)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  terraform:
+    # Not ubuntu-slim: this job needs the Azure and AWS CLIs.
+    runs-on: ubuntu-latest
+    # Environments are created on first reference. Add required reviewers to
+    # "apply" and "destroy" so a dispatch alone can't spend money.
+    environment: ${{ inputs.action }}
+    env:
+      TARGET: ${{ inputs.target }}
+      ARM_USE_OIDC: 'true'
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_wrapper: false
+
+      - name: Authenticate to Azure
+        if: startsWith(inputs.target, 'azure-')
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Authenticate to AWS
+        if: inputs.target == 'aws-s3'
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+      # State has to live somewhere durable or apply is a one-way door: a second run
+      # would try to recreate everything and destroy would have nothing to work from.
+      # Both bootstraps are idempotent, so re-running is free.
+      - name: Bootstrap Azure state backend
+        if: startsWith(inputs.target, 'azure-')
+        env:
+          STATE_RG: ${{ vars.TF_STATE_RESOURCE_GROUP || 'terraform-state' }}
+          STATE_SA: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+          LOCATION: ${{ vars.AZURE_LOCATION || 'eastus' }}
+        run: |
+          if [[ -z "$STATE_SA" ]]; then
+            echo "::error::Set the TF_STATE_STORAGE_ACCOUNT variable to a globally unique storage account name."
+            exit 1
+          fi
+          az group create --name "$STATE_RG" --location "$LOCATION" --output none
+          az storage account create \
+            --name "$STATE_SA" --resource-group "$STATE_RG" --location "$LOCATION" \
+            --sku Standard_LRS --allow-blob-public-access false \
+            --min-tls-version TLS1_2 --output none
+          # Key auth, not --auth-mode login: creating the account grants no data-plane
+          # access, so an AAD write here would fail until someone assigns a blob role.
+          # The key is fetched through ARM with the same OIDC identity.
+          az storage container create \
+            --name tfstate --account-name "$STATE_SA" --auth-mode key --output none
+          cat > "examples/$TARGET/backend.tf" <<'EOF'
+          terraform {
+            backend "azurerm" {}
+          }
+          EOF
+
+      - name: Bootstrap AWS state backend
+        if: inputs.target == 'aws-s3'
+        env:
+          STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+        run: |
+          if [[ -z "$STATE_BUCKET" ]]; then
+            echo "::error::Set the TF_STATE_BUCKET variable to a globally unique bucket name."
+            exit 1
+          fi
+          if ! aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null; then
+            if [[ "$AWS_REGION" == "us-east-1" ]]; then
+              aws s3api create-bucket --bucket "$STATE_BUCKET"
+            else
+              aws s3api create-bucket --bucket "$STATE_BUCKET" \
+                --create-bucket-configuration "LocationConstraint=$AWS_REGION"
+            fi
+            aws s3api put-bucket-versioning --bucket "$STATE_BUCKET" \
+              --versioning-configuration Status=Enabled
+          fi
+          cat > "examples/$TARGET/backend.tf" <<'EOF'
+          terraform {
+            backend "s3" {}
+          }
+          EOF
+
+      # Written as JSON so values pass through untouched, with no shell quoting to get wrong.
+      - name: Write variables
+        env:
+          GH_OWNER_ID: ${{ vars.GH_OWNER_ID }}
+          GH_OWNER_TYPE: ${{ vars.GH_OWNER_TYPE || 'organization' }}
+          SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          LOCATION: ${{ vars.AZURE_LOCATION || 'eastus' }}
+          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          CLUSTER_NAME: ${{ vars.KUSTO_CLUSTER_NAME }}
+          KUSTO_SKU: ${{ vars.KUSTO_SKU }}
+          STORAGE_ACCOUNT_NAME: ${{ vars.STORAGE_ACCOUNT_NAME }}
+          BUCKET_NAME: ${{ vars.S3_BUCKET_NAME }}
+          AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+        run: |
+          if [[ -z "$GH_OWNER_ID" ]]; then
+            echo "::error::Set the GH_OWNER_ID variable. The OIDC subject claim is built from it."
+            exit 1
+          fi
+
+          # These have no defaults because they have to be globally unique.
+          case "$TARGET" in
+            azure-kusto) required_var=KUSTO_CLUSTER_NAME;   required_val=$CLUSTER_NAME ;;
+            azure-blob)  required_var=STORAGE_ACCOUNT_NAME; required_val=$STORAGE_ACCOUNT_NAME ;;
+            aws-s3)      required_var=S3_BUCKET_NAME;       required_val=$BUCKET_NAME ;;
+          esac
+          if [[ -z "$required_val" ]]; then
+            echo "::error::Set the $required_var variable. It has to be globally unique."
+            exit 1
+          fi
+
+          jq -n \
+            --arg owner_id "$GH_OWNER_ID" \
+            --arg owner_type "$GH_OWNER_TYPE" \
+            --arg subscription_id "$SUBSCRIPTION_ID" \
+            --arg location "$LOCATION" \
+            --arg resource_group "$RESOURCE_GROUP" \
+            --arg cluster_name "$CLUSTER_NAME" \
+            --arg sku "$KUSTO_SKU" \
+            --arg storage_account "$STORAGE_ACCOUNT_NAME" \
+            --arg bucket "$BUCKET_NAME" \
+            --arg region "$AWS_REGION" \
+            --arg target "$TARGET" '
+            {github_owner_id: $owner_id, github_owner_type: $owner_type}
+            + (if $target == "aws-s3" then
+                 {region: $region} + (if $bucket == "" then {} else {bucket_name: $bucket} end)
+               else
+                 {subscription_id: $subscription_id, location: $location}
+                 + (if $resource_group == "" then {} else {resource_group_name: $resource_group} end)
+               end)
+            + (if $target == "azure-kusto" then
+                 (if $cluster_name == "" then {} else {cluster_name: $cluster_name} end)
+                 + (if $sku == "" then {} else {sku_name: $sku} end)
+               else {} end)
+            + (if $target == "azure-blob" and $storage_account != "" then
+                 {storage_account_name: $storage_account}
+               else {} end)
+          ' > "examples/$TARGET/ci.auto.tfvars.json"
+
+          echo "Variables written:"
+          jq 'keys' "examples/$TARGET/ci.auto.tfvars.json"
+
+      - name: Terraform init
+        working-directory: examples/${{ inputs.target }}
+        env:
+          STATE_RG: ${{ vars.TF_STATE_RESOURCE_GROUP || 'terraform-state' }}
+          STATE_SA: ${{ vars.TF_STATE_STORAGE_ACCOUNT }}
+          STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+        run: |
+          if [[ "$TARGET" == "aws-s3" ]]; then
+            terraform init -input=false \
+              -backend-config="bucket=$STATE_BUCKET" \
+              -backend-config="key=actions-data-stream/$TARGET.tfstate" \
+              -backend-config="region=$AWS_REGION"
+          else
+            terraform init -input=false \
+              -backend-config="resource_group_name=$STATE_RG" \
+              -backend-config="storage_account_name=$STATE_SA" \
+              -backend-config="container_name=tfstate" \
+              -backend-config="key=actions-data-stream/$TARGET.tfstate" \
+              -backend-config="use_oidc=true"
+          fi
+
+      - name: Terraform plan
+        if: inputs.action != 'destroy'
+        working-directory: examples/${{ inputs.target }}
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Terraform apply
+        if: inputs.action == 'apply'
+        working-directory: examples/${{ inputs.target }}
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Terraform destroy
+        if: inputs.action == 'destroy'
+        working-directory: examples/${{ inputs.target }}
+        run: terraform destroy -input=false -auto-approve
+
+      - name: Summary
+        if: inputs.action == 'apply'
+        working-directory: examples/${{ inputs.target }}
+        run: |
+          {
+            echo "### Sink configuration"
+            echo
+            echo "Paste this into the data stream settings page, or let the next step register it."
+            echo
+            echo '```json'
+            terraform output -json sink_config | jq .
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The only step that needs a stored secret, which is why it is opt-in.
+      # DATA_STREAM_TOKEN needs admin:org, or the write_organization_actions_data_stream_sinks
+      # fine-grained permission.
+      - name: Register the sink with GitHub
+        if: inputs.action == 'apply' && inputs.create_sink
+        env:
+          GH_TOKEN: ${{ secrets.DATA_STREAM_TOKEN }}
+          ORG: ${{ vars.GH_ORG }}
+          SINK_NAME: ${{ vars.SINK_NAME || 'terraform-managed' }}
+        run: |
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "::error::create_sink was requested but the DATA_STREAM_TOKEN secret is not set."
+            exit 1
+          fi
+          if [[ -z "$ORG" ]]; then
+            echo "::error::Set the GH_ORG variable to the organization login."
+            exit 1
+          fi
+          case "$TARGET" in
+            azure-kusto) sink_type=azure_kusto ;;
+            azure-blob)  sink_type=azure_blob ;;
+            aws-s3)      sink_type=s3 ;;
+            *) echo "::error::unknown target $TARGET"; exit 1 ;;
+          esac
+          scripts/create-sink.sh "$ORG" "$sink_type" "$SINK_NAME" "examples/$TARGET"
