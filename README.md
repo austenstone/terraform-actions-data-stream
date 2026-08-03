@@ -147,6 +147,33 @@ break CI instead of breaking you.
 That is the same trust pattern the data stream itself uses, which makes the workflow a working
 reference for the thing you are configuring.
 
+> [!NOTE]
+> `deploy.yml` is linted and reviewed but has not been run end to end, because doing so requires
+> rights on a subscription that the author does not have. Run `plan` first and read the output
+> before trusting it with an `apply`.
+
+### Bootstrapping the deploy identity
+
+The workflow authenticates as an identity that has to exist before the workflow can run, which the
+workflow therefore cannot create. Run this once from a shell with Owner or User Access Administrator:
+
+```bash
+scripts/bootstrap-deploy-identity.sh <subscription_id> <owner/repo>
+```
+
+It creates a managed identity, adds a federated credential per environment, grants Contributor, and
+prints the three variables to set.
+
+This is a **different** federated credential from the one the modules create. Keeping them straight
+matters, because the failure mode is identical either way:
+
+| | Subject | Lets |
+|---|---|---|
+| Created by `modules/azure-identity` | `actions-data-stream:organization/<id>` | GitHub's data stream service write to your sink |
+| Created by the bootstrap script | `repo:<owner>/<repo>:environment:<name>` | A workflow in your repo deploy infrastructure |
+
+### Configuration
+
 Set these as repository **variables**, not secrets. None of them are sensitive.
 
 | Variable | Needed for | Notes |
