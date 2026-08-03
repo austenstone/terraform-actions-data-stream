@@ -88,6 +88,12 @@ variable "identity_name" {
   default     = "actions-data-stream"
 }
 
+variable "create_deployer_admin" {
+  description = "Grant the Terraform principal Admin on the database. Azure already does this automatically for whoever creates the database, so this is only needed when adopting a pre-existing cluster you do not already administer."
+  type        = bool
+  default     = false
+}
+
 variable "tags" {
   description = "Tags applied to created resources."
   type        = map(string)

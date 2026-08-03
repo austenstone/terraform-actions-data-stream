@@ -111,6 +111,12 @@ terraform output -json sink_config \
 A `success: true` means GitHub can authenticate and write. Anything else comes back with the
 provider's own error message, which is usually enough to identify the problem.
 
+Or use the helper, which tests first and only creates the sink if the test passes:
+
+```bash
+scripts/create-sink.sh YOUR_ORG azure_blob my-sink examples/azure-blob
+```
+
 Common failures:
 
 | Error contains | Cause |

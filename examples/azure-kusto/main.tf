@@ -27,6 +27,7 @@ module "sink" {
   github_owner_id     = var.github_owner_id
   github_owner_type   = var.github_owner_type
   cluster_name        = var.cluster_name
+  sku_name            = var.sku_name
   ingestion_type      = var.ingestion_type
   tags                = var.tags
 }

@@ -37,6 +37,12 @@ variable "ingestion_type" {
   default     = "streaming"
 }
 
+variable "sku_name" {
+  description = "Cluster SKU. Dev SKUs run on spare capacity and can fail with InsufficientResourcesForSubscription; try another region or SKU if so."
+  type        = string
+  default     = "Dev(No SLA)_Standard_E2a_v4"
+}
+
 variable "tags" {
   description = "Tags applied to created resources."
   type        = map(string)

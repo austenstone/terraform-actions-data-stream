@@ -41,6 +41,12 @@ variable "identity_name" {
   default     = "actions-data-stream"
 }
 
+variable "create_role_assignment" {
+  description = "Create the Storage Blob Data Contributor assignment. Requires User Access Administrator or Owner; plain Contributor is not enough. Set to false to have someone else apply it, then use the role_assignment_command output."
+  type        = bool
+  default     = true
+}
+
 variable "tags" {
   description = "Tags applied to created resources."
   type        = map(string)

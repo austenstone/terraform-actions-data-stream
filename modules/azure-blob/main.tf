@@ -31,8 +31,12 @@ resource "azurerm_storage_container" "this" {
 }
 
 # Data-plane role. Contributor on the subscription is NOT sufficient to write
-# blobs; the identity needs an explicit data role.
+# blobs; the identity needs an explicit data role. Creating the assignment
+# itself requires User Access Administrator or Owner, which is often a
+# different person than the one running Terraform.
 resource "azurerm_role_assignment" "blob_writer" {
+  count = var.create_role_assignment ? 1 : 0
+
   scope                = azurerm_storage_container.this.id
   role_definition_name = "Storage Blob Data Contributor"
   principal_id         = module.identity.principal_id

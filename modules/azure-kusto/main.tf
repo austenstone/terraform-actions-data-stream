@@ -34,10 +34,13 @@ resource "azurerm_kusto_database" "this" {
   soft_delete_period  = var.soft_delete_period
 }
 
-# Creating a cluster via ARM does not grant the deployer data-plane rights, so
-# the script below would fail without this. Terraform has no implicit ordering
-# between a principal assignment and a script, hence the explicit depends_on.
+# The script below needs Admin on the database. Azure grants that automatically
+# to whoever creates the database, so this is off by default and exists only for
+# the case where you are adopting a cluster someone else built. Creating it when
+# the assignment already exists fails with a 400.
 resource "azurerm_kusto_database_principal_assignment" "deployer" {
+  count = var.create_deployer_admin ? 1 : 0
+
   name                = "terraform-deployer"
   resource_group_name = var.resource_group_name
   cluster_name        = azurerm_kusto_cluster.this.name
