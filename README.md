@@ -10,6 +10,13 @@ setup is what these modules do.
 > [!NOTE]
 > Actions Data Stream is in preview. Availability depends on your plan and feature enablement.
 
+> [!IMPORTANT]
+> **Enablement is two separate switches.** One turns on the settings page and the REST API, a
+> second one turns on the actual event emission. It is entirely possible to create a sink, have
+> it report `status: active` and `sink_health: healthy`, pass a connection test, and still receive
+> zero workflow events — because only the first switch is on. If that's what you're seeing, your
+> cloud config is fine; ask GitHub to enable event publishing for your org or enterprise.
+
 ## What gets created
 
 | Module | Creates |
@@ -131,19 +138,63 @@ retry before changing anything.
 
 ## Events
 
-Five event types are streamed:
+Four event types are emitted today:
 
 - `workflow_run_created`
 - `workflow_run_completed`
 - `workflow_job_created`
 - `workflow_job_completed`
-- `actions_resolved` — the requested action name and version alongside the **resolved SHA**, which is
-  what makes supply-chain auditing possible
+
+A fifth, `actions_resolved` (requested action name/version alongside the **resolved SHA**, the one
+that would make supply-chain auditing possible), appears in the documentation but does not currently
+fire. Don't build against it yet.
 
 Delivery is at-least-once with no ordering guarantee, so deduplicate on `eventUuid` and sort on
 `eventTimestamp` rather than assuming arrival order.
 
 Payloads are newline-delimited JSON. Blob and S3 write one object per batch.
+
+### What's actually in a payload
+
+`workflow_job_completed`:
+
+```json
+{
+  "job_id": 73743554030,
+  "job_uuid": "09808b57-83b9-576e-a95a-060b3e01faa4",
+  "job_key": "matrix._1",
+  "job_status": "completed",
+  "job_conclusion": "success",
+  "job_started_at": "2026-08-03T20:40:23.0000000Z",
+  "job_completed_at": "2026-08-03T20:40:25.0000000Z",
+  "job_labels": ["ubuntu-latest"],
+  "runner_id": 1001336145,
+  "runner_name": "GitHub Actions 1001336145",
+  "runner_group_id": 0,
+  "runner_group_name": "GitHub Actions",
+  "repository_id": 1322162471,
+  "repository_owner_id": 1234567,
+  "check_run_id": 91811564148,
+  "check_suite_id": 83659228428,
+  "workflow_run_id": 30851260703,
+  "workflow_run_uuid": "ab8e8a98-f8c0-4133-91e8-8742b4687a20",
+  "workflow_run_attempt": 1,
+  "workflow_run_actor_id": 22425467,
+  "workflow_run_head_sha": "f65ca40f300c530c834a70fd303776addb92505f"
+}
+```
+
+`workflow_run_completed` adds a nested `workflow` object (`id`, `name`, `path`, `state`,
+`present_in_default_branch`) plus `workflow_run_event`, `workflow_run_name`, `workflow_run_number`,
+`workflow_run_head_branch`, and `workflow_file_path`.
+
+Two things to plan around:
+
+- **Identifiers only, no names.** You get `repository_id`, not `owner/repo`, and
+  `workflow_run_actor_id`, not a login. Anything human-readable requires a join against the REST API,
+  so budget for a lookup table if you're building dashboards.
+- **No billing data.** There are no billable minutes, runner sizes, or cost fields. `job_labels` and
+  `runner_group_name` are the only runner signal. This is a telemetry feed, not a billing feed.
 
 ## Cleanup
 

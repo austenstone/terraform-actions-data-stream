@@ -1,5 +1,5 @@
 subscription_id   = "00000000-0000-0000-0000-000000000000"
-github_owner_id   = "38940897"
+github_owner_id   = "1234567"
 github_owner_type = "organization"
 cluster_name      = "myadscluster"
 ingestion_type    = "streaming"
