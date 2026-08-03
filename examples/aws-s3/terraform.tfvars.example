@@ -1,0 +1,11 @@
+region            = "us-east-1"
+github_owner_id   = "38940897"
+github_owner_type = "organization"
+bucket_name       = "my-actions-data-stream"
+
+# Most accounts already have the GitHub OIDC provider from regular Actions OIDC.
+create_oidc_provider = true
+
+tags = {
+  purpose = "actions-data-stream"
+}

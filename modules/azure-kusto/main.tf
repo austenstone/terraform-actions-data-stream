@@ -1,0 +1,99 @@
+data "azurerm_client_config" "current" {}
+
+module "identity" {
+  source = "../azure-identity"
+
+  name                = var.identity_name
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  github_owner_id     = var.github_owner_id
+  github_owner_type   = var.github_owner_type
+  tags                = var.tags
+}
+
+resource "azurerm_kusto_cluster" "this" {
+  name                = var.cluster_name
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  tags                = var.tags
+
+  sku {
+    name     = var.sku_name
+    capacity = var.sku_capacity
+  }
+
+  streaming_ingestion_enabled = var.ingestion_type == "streaming"
+}
+
+resource "azurerm_kusto_database" "this" {
+  name                = var.database_name
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  cluster_name        = azurerm_kusto_cluster.this.name
+  hot_cache_period    = var.hot_cache_period
+  soft_delete_period  = var.soft_delete_period
+}
+
+# Creating a cluster via ARM does not grant the deployer data-plane rights, so
+# the script below would fail without this. Terraform has no implicit ordering
+# between a principal assignment and a script, hence the explicit depends_on.
+resource "azurerm_kusto_database_principal_assignment" "deployer" {
+  name                = "terraform-deployer"
+  resource_group_name = var.resource_group_name
+  cluster_name        = azurerm_kusto_cluster.this.name
+  database_name       = azurerm_kusto_database.this.name
+  tenant_id           = data.azurerm_client_config.current.tenant_id
+  principal_id        = data.azurerm_client_config.current.object_id
+  principal_type      = "User"
+  role                = "Admin"
+}
+
+resource "azurerm_kusto_database_principal_assignment" "ingestor" {
+  name                = "actions-data-stream"
+  resource_group_name = var.resource_group_name
+  cluster_name        = azurerm_kusto_cluster.this.name
+  database_name       = azurerm_kusto_database.this.name
+  tenant_id           = module.identity.tenant_id
+  principal_id        = module.identity.principal_id
+  principal_type      = "App"
+  role                = "Ingestor"
+}
+
+locals {
+  streaming_policy = var.ingestion_type == "streaming" ? ".alter table ${var.table_name} policy streamingingestion enable" : ""
+
+  # Columns mirror the data stream envelope. eventData stays dynamic because its
+  # shape differs per eventType.
+  script = <<-KQL
+    .create-merge table ${var.table_name} (
+        eventUuid: string,
+        eventType: string,
+        eventTimestamp: datetime,
+        enterpriseId: long,
+        organizationId: long,
+        eventData: dynamic
+    )
+
+    .create-or-alter table ${var.table_name} ingestion json mapping "${var.mapping_name}"
+    '['
+    '    { "column": "eventUuid", "Properties": {"Path": "$.eventUuid"} },'
+    '    { "column": "eventType", "Properties": {"Path": "$.eventType"} },'
+    '    { "column": "eventTimestamp", "Properties": {"Path": "$.eventTimestamp"} },'
+    '    { "column": "enterpriseId", "Properties": {"Path": "$.enterpriseId"} },'
+    '    { "column": "organizationId", "Properties": {"Path": "$.organizationId"} },'
+    '    { "column": "eventData", "Properties": {"Path": "$.eventData"} }'
+    ']'
+
+    ${local.streaming_policy}
+  KQL
+}
+
+resource "azurerm_kusto_script" "schema" {
+  name                               = "actions-data-stream-schema"
+  database_id                        = azurerm_kusto_database.this.id
+  script_content                     = local.script
+  continue_on_errors_enabled         = false
+  force_an_update_when_value_changed = sha256(local.script)
+
+  depends_on = [azurerm_kusto_database_principal_assignment.deployer]
+}

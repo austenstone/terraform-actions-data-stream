@@ -1,0 +1,95 @@
+variable "resource_group_name" {
+  description = "Existing resource group to deploy into."
+  type        = string
+}
+
+variable "location" {
+  description = "Azure region."
+  type        = string
+}
+
+variable "github_owner_id" {
+  description = "Numeric GitHub organization or enterprise ID."
+  type        = string
+}
+
+variable "github_owner_type" {
+  description = "organization or enterprise."
+  type        = string
+  default     = "organization"
+}
+
+variable "cluster_name" {
+  description = "Kusto cluster name. Must be globally unique and lowercase."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z][a-z0-9]{3,21}$", var.cluster_name))
+    error_message = "cluster_name must be 4-22 characters, start with a letter, and be lowercase alphanumeric."
+  }
+}
+
+variable "sku_name" {
+  description = "Cluster SKU. The Dev/No SLA SKU is the cheapest and is fine for testing."
+  type        = string
+  default     = "Dev(No SLA)_Standard_E2a_v4"
+}
+
+variable "sku_capacity" {
+  description = "Node count. Dev SKUs only support 1."
+  type        = number
+  default     = 1
+}
+
+variable "database_name" {
+  description = "Kusto database name."
+  type        = string
+  default     = "ActionsDataStream"
+}
+
+variable "table_name" {
+  description = "Table that events are ingested into."
+  type        = string
+  default     = "ActionsEvents"
+}
+
+variable "mapping_name" {
+  description = "JSON ingestion mapping name."
+  type        = string
+  default     = "ActionsEventsMapping"
+}
+
+variable "ingestion_type" {
+  description = "streaming or queued. Streaming has lower latency; queued is more forgiving at high volume."
+  type        = string
+  default     = "streaming"
+
+  validation {
+    condition     = contains(["streaming", "queued"], var.ingestion_type)
+    error_message = "ingestion_type must be streaming or queued."
+  }
+}
+
+variable "hot_cache_period" {
+  description = "How long data stays in hot cache."
+  type        = string
+  default     = "P31D"
+}
+
+variable "soft_delete_period" {
+  description = "How long data is retained."
+  type        = string
+  default     = "P365D"
+}
+
+variable "identity_name" {
+  description = "Name of the user-assigned managed identity."
+  type        = string
+  default     = "actions-data-stream"
+}
+
+variable "tags" {
+  description = "Tags applied to created resources."
+  type        = map(string)
+  default     = {}
+}
