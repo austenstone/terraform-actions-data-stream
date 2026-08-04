@@ -259,7 +259,7 @@
       "id": "2b9c565a-7e8a-4099-b89a-4555b50dc96a",
       "title": "Health",
       "visualType": "multistat",
-      "pageId": "page-1",
+      "pageId": "4fbcd9ec-9fb9-5680-9226-42f8cc0da0f2",
       "layout": {
         "x": 0,
         "y": 0,
@@ -293,7 +293,7 @@
       "id": "4e330c8d-e567-4dd3-9fd4-b311b2e62502",
       "title": "Throughput",
       "visualType": "line",
-      "pageId": "page-1",
+      "pageId": "4fbcd9ec-9fb9-5680-9226-42f8cc0da0f2",
       "layout": {
         "x": 0,
         "y": 6,
@@ -350,7 +350,7 @@
       "id": "2deb94fc-9ce2-40ac-b2cf-2b92ffebc6c4",
       "title": "Outcomes",
       "visualType": "pie",
-      "pageId": "page-1",
+      "pageId": "4fbcd9ec-9fb9-5680-9226-42f8cc0da0f2",
       "layout": {
         "x": 12,
         "y": 6,
@@ -405,7 +405,7 @@
       "id": "c20db8c5-16bc-42ae-9330-ed93dd338e94",
       "title": "Busiest workflows",
       "visualType": "table",
-      "pageId": "page-1",
+      "pageId": "4fbcd9ec-9fb9-5680-9226-42f8cc0da0f2",
       "layout": {
         "x": 0,
         "y": 14,
@@ -413,9 +413,8 @@
         "height": 8
       },
       "visualOptions": {
-        "colorRulesDisabled": false,
+        "colorRulesDisabled": true,
         "colorRules": [],
-        "colorStyle": "light",
         "table__enableRenderLinks": true,
         "table__renderLinks": [],
         "crossFilterDisabled": false,
@@ -433,7 +432,7 @@
       "id": "9e6f09f7-b56e-4543-b15a-b8e452f9a506",
       "title": "How runs are triggered",
       "visualType": "stackedcolumn",
-      "pageId": "page-1",
+      "pageId": "4fbcd9ec-9fb9-5680-9226-42f8cc0da0f2",
       "layout": {
         "x": 12,
         "y": 14,
@@ -488,7 +487,7 @@
       "id": "835f6d96-211b-4dca-9558-3f9edb87762d",
       "title": "Queue time by runner label",
       "visualType": "table",
-      "pageId": "page-2",
+      "pageId": "9af0980f-aed5-5eaf-9d28-ae33ad06c7c1",
       "layout": {
         "x": 0,
         "y": 0,
@@ -496,9 +495,8 @@
         "height": 9
       },
       "visualOptions": {
-        "colorRulesDisabled": false,
+        "colorRulesDisabled": true,
         "colorRules": [],
-        "colorStyle": "light",
         "table__enableRenderLinks": true,
         "table__renderLinks": [],
         "crossFilterDisabled": false,
@@ -516,7 +514,7 @@
       "id": "e6a38483-82a7-4cc4-a958-07827562faf8",
       "title": "Queue time trend",
       "visualType": "line",
-      "pageId": "page-2",
+      "pageId": "9af0980f-aed5-5eaf-9d28-ae33ad06c7c1",
       "layout": {
         "x": 0,
         "y": 9,
@@ -572,7 +570,7 @@
       "id": "b5adaa4e-f65b-468e-8e30-6282c6fb2164",
       "title": "Concurrency",
       "visualType": "line",
-      "pageId": "page-2",
+      "pageId": "9af0980f-aed5-5eaf-9d28-ae33ad06c7c1",
       "layout": {
         "x": 12,
         "y": 9,
@@ -629,7 +627,7 @@
       "id": "8bf8e002-5885-4a29-b9a8-1641a92d097f",
       "title": "Slowest jobs to get a runner",
       "visualType": "table",
-      "pageId": "page-2",
+      "pageId": "9af0980f-aed5-5eaf-9d28-ae33ad06c7c1",
       "layout": {
         "x": 0,
         "y": 17,
@@ -637,9 +635,8 @@
         "height": 8
       },
       "visualOptions": {
-        "colorRulesDisabled": false,
+        "colorRulesDisabled": true,
         "colorRules": [],
-        "colorStyle": "light",
         "table__enableRenderLinks": true,
         "table__renderLinks": [],
         "crossFilterDisabled": false,
@@ -657,7 +654,7 @@
       "id": "d6c08797-0ab0-49a3-bcd3-d95eefa2d8e3",
       "title": "Runner groups",
       "visualType": "table",
-      "pageId": "page-2",
+      "pageId": "9af0980f-aed5-5eaf-9d28-ae33ad06c7c1",
       "layout": {
         "x": 12,
         "y": 17,
@@ -665,9 +662,8 @@
         "height": 8
       },
       "visualOptions": {
-        "colorRulesDisabled": false,
+        "colorRulesDisabled": true,
         "colorRules": [],
-        "colorStyle": "light",
         "table__enableRenderLinks": true,
         "table__renderLinks": [],
         "crossFilterDisabled": false,
@@ -685,7 +681,7 @@
       "id": "4439f5da-fefc-4c3b-a134-610eaeda9a4a",
       "title": "Failure hotspots",
       "visualType": "table",
-      "pageId": "page-3",
+      "pageId": "8232ede9-1c35-517b-bac9-63a61c479428",
       "layout": {
         "x": 0,
         "y": 0,
@@ -693,9 +689,8 @@
         "height": 9
       },
       "visualOptions": {
-        "colorRulesDisabled": false,
+        "colorRulesDisabled": true,
         "colorRules": [],
-        "colorStyle": "light",
         "table__enableRenderLinks": true,
         "table__renderLinks": [],
         "crossFilterDisabled": false,
@@ -713,7 +708,7 @@
       "id": "768ee771-dc21-4e2c-8c18-11df185d9251",
       "title": "Orchestration overhead",
       "visualType": "table",
-      "pageId": "page-3",
+      "pageId": "8232ede9-1c35-517b-bac9-63a61c479428",
       "layout": {
         "x": 0,
         "y": 9,
@@ -721,9 +716,8 @@
         "height": 8
       },
       "visualOptions": {
-        "colorRulesDisabled": false,
+        "colorRulesDisabled": true,
         "colorRules": [],
-        "colorStyle": "light",
         "table__enableRenderLinks": true,
         "table__renderLinks": [],
         "crossFilterDisabled": false,
@@ -741,7 +735,7 @@
       "id": "ab44e53d-4fa1-42d8-b28d-39897f950d17",
       "title": "Time lost waiting",
       "visualType": "table",
-      "pageId": "page-3",
+      "pageId": "8232ede9-1c35-517b-bac9-63a61c479428",
       "layout": {
         "x": 12,
         "y": 9,
@@ -749,9 +743,8 @@
         "height": 8
       },
       "visualOptions": {
-        "colorRulesDisabled": false,
+        "colorRulesDisabled": true,
         "colorRules": [],
-        "colorStyle": "light",
         "table__enableRenderLinks": true,
         "table__renderLinks": [],
         "crossFilterDisabled": false,
@@ -769,7 +762,7 @@
       "id": "2544454a-bd9d-4c01-ad8b-921fc0e33563",
       "title": "Longest poles",
       "visualType": "table",
-      "pageId": "page-3",
+      "pageId": "8232ede9-1c35-517b-bac9-63a61c479428",
       "layout": {
         "x": 0,
         "y": 17,
@@ -777,9 +770,8 @@
         "height": 8
       },
       "visualOptions": {
-        "colorRulesDisabled": false,
+        "colorRulesDisabled": true,
         "colorRules": [],
-        "colorStyle": "light",
         "table__enableRenderLinks": true,
         "table__renderLinks": [],
         "crossFilterDisabled": false,
@@ -797,7 +789,7 @@
       "id": "e62a7608-6fed-422c-a9c1-9e229ff52a43",
       "title": "How to read this",
       "visualType": "markdownCard",
-      "pageId": "page-1",
+      "pageId": "4fbcd9ec-9fb9-5680-9226-42f8cc0da0f2",
       "layout": {
         "x": 0,
         "y": 22,
@@ -811,15 +803,15 @@
   "pages": [
     {
       "name": "Overview",
-      "id": "page-1"
+      "id": "4fbcd9ec-9fb9-5680-9226-42f8cc0da0f2"
     },
     {
       "name": "Queue & runners",
-      "id": "page-2"
+      "id": "9af0980f-aed5-5eaf-9d28-ae33ad06c7c1"
     },
     {
       "name": "Where time goes",
-      "id": "page-3"
+      "id": "8232ede9-1c35-517b-bac9-63a61c479428"
     }
   ],
   "embeddedApps": []
