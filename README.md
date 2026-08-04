@@ -40,6 +40,10 @@ most time:
   streaming ingestion.
 - [#2](https://github.com/austenstone/terraform-actions-data-stream/issues/2) — a sink reports
   `active` while delivering nothing, because event emission is behind a *second* feature flag.
+- [#11](https://github.com/austenstone/terraform-actions-data-stream/issues/11) — `sink_health`
+  reports failures well, but `last_success_at` only tracks connection tests, so a busy sink and a
+  silent one look identical — and an unhealthy sink doesn't self-heal. See
+  [Operating it](#operating-it).
 
 Plans and next steps are in
 [#7](https://github.com/austenstone/terraform-actions-data-stream/issues/7).
@@ -390,6 +394,117 @@ executed against a live cluster, so an empty tile means no matching data, not a 
 One thing the dashboard cannot show you: **cost**. The stream carries no billable minutes and no
 runner SKU. Every duration is wall clock. `job_labels` and `runner_group_name` are the only runner
 signal, which is enough to compare GHR-vs-SHR queue behaviour but not to price it.
+
+## Operating it
+
+Things that only show up once the stream has been running for a while.
+
+### `sink_health` is failure-only
+
+`GET /orgs/{org}/actions/data-stream/sinks` returns a `sink_health` block. It reacts to failures
+well and to successes not at all.
+
+**Failures are caught fast and reported verbatim.** I dropped the destination Kusto table out from
+under a live sink; 56 seconds later:
+
+```json
+{
+  "health_status": "unhealthy",
+  "consecutive_failures": 2,
+  "last_failure_at": "2026-08-04T23:22:54Z",
+  "last_error": "upload failed on attempt 5 of 5: kusto upload failed with status 409: Conflict: ..."
+}
+```
+
+The raw destination error is passed straight through, retries included. **Alerting on
+`health_status != "healthy"` works** — use it.
+
+**Successes are a different story.** There *is* a `last_success_at` field, but it only advances on
+a connection test — never on a real delivery. Measured with two sinks on the same live traffic:
+
+| sink | events delivered | `last_success_at` |
+|---|---:|---|
+| running 27h, never re-tested | 21,000+ | **absent from the response** |
+| `PATCH`ed at `23:32:40Z` | 33 over the next 6 min | frozen at **`23:32:40Z`** |
+
+So on a healthy sink these three are indistinguishable:
+
+| Actual state | reported |
+|---|---|
+| delivering thousands of events/hour | `healthy` |
+| delivering zero events, org is idle | `healthy` |
+| delivering zero events because emission broke upstream | `healthy` |
+
+That last row is the [#2](https://github.com/austenstone/terraform-actions-data-stream/issues/2)
+failure mode, and health cannot see it — a stream that goes quiet never *fails* a delivery. So pair
+the health check with a volume check at the destination:
+
+```kusto
+ActionsEvents | where eventTimestamp > ago(30m) | count   // alert if 0 during business hours
+```
+
+### An unhealthy sink does not recover on its own
+
+Same experiment, continued. After the table was **recreated** and the destination was healthy again,
+the sink stayed `unhealthy` for the full 8 minutes I watched it, delivering nothing —
+`consecutive_failures` frozen at 2, `checked_at` frozen. It came back only when I manually `PATCH`ed
+it with an identical config, and then delivery resumed immediately.
+
+```bash
+# recovery lever after a destination outage
+gh api -X PATCH /orgs/{org}/actions/data-stream/sinks/{id} --input sink.json
+```
+
+Catch: `PATCH` validates live, so **you cannot PATCH your way out until the destination is
+independently verified working.** During the ADX schema-cache window below, the same call returned
+`422`. Fix the destination, confirm it accepts writes, *then* PATCH.
+
+Both of these are tracked in
+[#11](https://github.com/austenstone/terraform-actions-data-stream/issues/11).
+
+The good news: **you cannot save a broken sink.** `POST` and `PATCH` both run a real connection test
+and reject on failure. Destination drift after creation is the only way a sink goes bad.
+
+### Multiple sinks work, but new ones miss the first few minutes
+
+Two sinks on the same org deliver the same events to both destinations. Measured over a seven-minute
+window: 12 events, 12 in both, zero divergence. So "Kusto **and** S3" is a supported answer.
+
+A freshly created sink does drop some events during registration — a second sink created at
+`23:08:18Z` missed 2 of the 6 events in the following three minutes, then matched perfectly from
+then on. Don't benchmark fan-out fidelity until a sink has been up for ~5 minutes.
+
+The per-org sink cap is untested; I've only run two.
+
+### ADX streaming ingestion caches table schema for ~5 minutes
+
+If you add a table to an existing cluster and immediately point a sink at it, `test-connection`
+fails:
+
+```
+kusto upload failed with status 400: BadRequest_EntityNotFound
+```
+
+even though `.show tables`, `.show table X ingestion json mappings` and
+`.show table X policy streamingingestion` all confirm everything exists. This is ADX caching the
+streaming schema, not a GitHub bug. Wait ~5 minutes after creating a table and retry. Terraform's
+`azurerm_kusto_script` runs before the sink exists, so a clean `apply` is usually far enough ahead of
+first ingest that you never see this.
+
+### Changing a materialized view needs a manual drop
+
+`azurerm_kusto_script` is idempotent, so editing a materialized view in
+[`kql/analytics.kql`](modules/azure-kusto/kql/analytics.kql) and re-applying is a **no-op** — the
+script has already run and `.create ifnotexists` does nothing. Functions are fine (they use
+`.create-or-alter`), but views need:
+
+```kusto
+.drop materialized-view Jobs          // note: does NOT accept `ifexists`
+.create materialized-view with (backfill=true) Jobs on table ActionsEvents { ... }
+```
+
+`backfill` is create-only. `.create-or-alter materialized-view with (backfill=true)` works exactly
+once and then fails forever with *"Unsupported property in materialized view alter command"*.
 
 ## Cleanup
 
