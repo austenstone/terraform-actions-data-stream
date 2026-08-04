@@ -23,12 +23,18 @@
 
 // ---------------------------------------------------------------- silver
 
+// `job_started_at` is overloaded upstream: on workflow_job_created it carries the
+// time the job was QUEUED, on workflow_job_completed it carries the time the job
+// actually STARTED. There is no job_queued_at field. Reading the queue time from
+// the created event's payload (rather than its envelope eventTimestamp) is what
+// makes queue_seconds correct -- the envelope lags emission and goes negative for
+// 5% of jobs. See https://github.com/austenstone/terraform-actions-data-stream/issues/9
 .create ifnotexists materialized-view with (backfill=true, docString="One row per job") Jobs on table ${table_name} {
     ${table_name}
     | where eventType in ("workflow_job_created", "workflow_job_completed")
     | extend job_id = tolong(eventData.job_id)
     | summarize
-        queued_at    = minif(eventTimestamp, eventType == "workflow_job_created"),
+        queued_at    = minif(todatetime(eventData.job_started_at), eventType == "workflow_job_created"),
         completed_ev = arg_max(iff(eventType == "workflow_job_completed", eventTimestamp, datetime(null)), eventData)
       by job_id
 }
@@ -45,10 +51,10 @@
 
 // ------------------------------------------------------------------ gold
 
-// queue_seconds is measured from the created event to job_started_at. A small
-// share of jobs (~5% observed) come out negative because the created event can
-// be emitted slightly after the job actually starts. Filter those out of
-// percentiles rather than clamping, so the bias stays visible.
+// queue_seconds is created.job_started_at (queued) -> completed.job_started_at
+// (actually started). Both come from the payload, never from the envelope, so
+// the value is never negative. Measured over 6,769 jobs: 0% negative, p50 2s,
+// p95 11s. Deriving queued_at from eventTimestamp instead yields 5.1% negative.
 .create-or-alter function with (docString="One row per completed job, typed and derived", folder="gold") JobFacts() {
     Jobs
     | where isnotnull(completed_ev)
@@ -90,6 +96,28 @@
     | extend wall_seconds = datetime_diff("second", completed_ev, created_at)
     | project run_id, repository_id, actor_id, attempt, created_at, completed_at = completed_ev,
               wall_seconds, conclusion, workflow_name, workflow_path, trigger, branch
+}
+
+// Runs that emitted `created` but never `completed`. Two populations land here:
+// genuinely in-flight runs (young), and runs that terminated without ever
+// dispatching a job -- those never emit a completion at all and stay open
+// forever. See https://github.com/austenstone/terraform-actions-data-stream/issues/8
+//
+// The `has_jobs` column separates them cleanly: measured over 3,853 runs, every
+// single phantom had has_jobs == false and no run with has_jobs == true was a
+// phantom. Anything with has_jobs == false and age over a few minutes is a
+// dropped completion, not a running workflow.
+.create-or-alter function with (docString="Runs with a created event and no completion", folder="gold") StuckRuns() {
+    let jobbed = Jobs
+      | extend rid = tolong(eventData.workflow_run_id)
+      | distinct rid;
+    Runs
+    | where isnull(completed_ev)
+    | extend has_jobs = run_id in (jobbed)
+    | extend age = now() - created_at
+    | project run_id, created_at, age, has_jobs,
+              likely_dropped = not(has_jobs) and age > 10m
+    | order by created_at asc
 }
 
 // ------------------------------------------------------------------ otel
