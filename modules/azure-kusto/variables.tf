@@ -94,6 +94,12 @@ variable "create_deployer_admin" {
   default     = false
 }
 
+variable "viewer_group_object_id" {
+  description = "Object ID of an Entra security group to grant Viewer on the database. Without this, only the deployer can read the data — there is no tenant-wide default. Must be security-enabled; Kusto rejects Microsoft 365 / Unified groups. Note that Fabric dashboard permissions are separate from these ACLs, so sharing a dashboard alone is not enough."
+  type        = string
+  default     = null
+}
+
 variable "create_analytics" {
   description = "Create the silver/gold analytics layer: Jobs and Runs materialized views, JobFacts() and RunFacts() functions, and an OtelSpans() function that emits OTel cicd.* spans. See modules/azure-kusto/kql/analytics.kql."
   type        = bool

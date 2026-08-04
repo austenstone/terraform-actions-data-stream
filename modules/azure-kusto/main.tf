@@ -51,6 +51,28 @@ resource "azurerm_kusto_database_principal_assignment" "deployer" {
   role                = "Admin"
 }
 
+# Nobody but the deployer can read this database. There is no tenant-wide default,
+# and Kusto rejects Microsoft 365 / Unified groups ("All Company" and friends) with
+# "Requested entity is not valid and could not be retrieved from AAD" — it only
+# accepts security-enabled groups. Sharing a dashboard does NOT grant DB access:
+# Fabric item permissions and Kusto database ACLs are independent, so a teammate
+# who can open the dashboard still gets a bare "Access denied" naming only their
+# principal GUID, with no hint about which system refused them.
+#
+# Set viewer_group_object_id to a security group and manage membership there.
+resource "azurerm_kusto_database_principal_assignment" "viewers" {
+  count = var.viewer_group_object_id == null ? 0 : 1
+
+  name                = "viewers"
+  resource_group_name = var.resource_group_name
+  cluster_name        = azurerm_kusto_cluster.this.name
+  database_name       = azurerm_kusto_database.this.name
+  tenant_id           = data.azurerm_client_config.current.tenant_id
+  principal_id        = var.viewer_group_object_id
+  principal_type      = "Group"
+  role                = "Viewer"
+}
+
 resource "azurerm_kusto_database_principal_assignment" "ingestor" {
   name                = "actions-data-stream"
   resource_group_name = var.resource_group_name
