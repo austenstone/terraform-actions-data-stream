@@ -94,6 +94,12 @@ variable "create_deployer_admin" {
   default     = false
 }
 
+variable "create_analytics" {
+  description = "Create the silver/gold analytics layer: Jobs and Runs materialized views, JobFacts() and RunFacts() functions, and an OtelSpans() function that emits OTel cicd.* spans. See modules/azure-kusto/kql/analytics.kql."
+  type        = bool
+  default     = true
+}
+
 variable "tags" {
   description = "Tags applied to created resources."
   type        = map(string)

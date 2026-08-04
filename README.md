@@ -268,6 +268,79 @@ Two things to plan around:
 - **No billing data.** There are no billable minutes, runner sizes, or cost fields. `job_labels` and
   `runner_group_name` are the only runner signal. This is a telemetry feed, not a billing feed.
 
+## Consuming the data
+
+Raw events are hard to query directly. Every event arrives twice — once at `*_created`, once at
+`*_completed` — often minutes apart, so any useful question ("how long did that job queue?") is a
+self-join over a `dynamic` column. The Kusto module builds the join once, as a serving layer, and
+ships it with `create_analytics = true` (the default).
+
+Three tiers, in [`modules/azure-kusto/kql/analytics.kql`](modules/azure-kusto/kql/analytics.kql):
+
+| Tier | Object | What it is |
+|---|---|---|
+| Bronze | `ActionsEvents` | Raw envelope, `eventData` as `dynamic`. Never query this directly. |
+| Silver | `Jobs`, `Runs` | Materialized views. One row per job / per run, `created` and `completed` already paired. |
+| Gold | `JobFacts()`, `RunFacts()` | Typed columns, computed durations, `runner_kind`, `job_name`. Start here. |
+| — | `OtelSpans()` | The same data as OpenTelemetry `cicd.*` spans. See below. |
+
+Materialized views rather than update policies: an update policy fires per-row at ingest and never
+sees both halves of a pair, and [update policies using `join` conflict with streaming
+ingestion](https://learn.microsoft.com/azure/data-explorer/kusto/management/update-policy).
+
+```kusto
+// Queue time by runner label — the question this feed is actually for
+JobFacts()
+| where runner_kind != "unknown"          // "unknown" == skipped jobs, all-zero timings
+| summarize jobs = count(),
+            p50 = percentile(queue_seconds, 50),
+            p95 = percentile(queue_seconds, 95)
+  by labels = tostring(job_labels), runner_group
+| order by p95 desc
+```
+
+```kusto
+// Orchestration overhead: wall time not explained by the longest job.
+// Pure serialization and queue waste.
+RunFacts()
+| where jobs > 1
+| summarize p95_overhead = percentile(wall_seconds - max_job_exec, 95), runs = count()
+  by workflow_name
+| order by p95_overhead desc
+```
+
+Three things to know before you build on it:
+
+- **Filter `runner_kind == "unknown"`.** Skipped jobs emit both events with zero durations. On a real
+  org they were 40% of rows and destroyed every average.
+- **Dedupe on `eventUuid` if correctness matters.** Delivery is at-least-once. Across 20k observed
+  events there were zero duplicates, but the contract permits them.
+- **~5% of queue times compute negative** — `workflow_job_created` is occasionally emitted after the
+  job actually starts. The gold functions leave these visible rather than clamping to zero, so filter
+  `queue_seconds >= 0` in percentiles instead of hiding the skew.
+
+### OpenTelemetry export
+
+The stream carries `workflow_run_id`, `workflow_run_attempt`, and `check_run_id` — which happen to be
+every hash input the [OpenTelemetry Collector's
+`githubreceiver`](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/receiver/githubreceiver)
+uses to build deterministic trace and span IDs. `OtelSpans()` reproduces them exactly, so the spans
+are ID-identical to what a webhook-based receiver would emit:
+
+```
+SERVER     RUN Dependabot Updates    52043ms   parent=∅
+INTERNAL     Dependabot              48000ms   parent=dacfe926…
+INTERNAL       queue Dependabot       1389ms   parent=5c869269…
+```
+
+That means you can get OTel-compliant CI traces into Tempo, Jaeger, Honeycomb, or Datadog **without
+hosting a webhook endpoint or running a collector**. Attributes follow the
+[`cicd.*` semantic conventions](https://opentelemetry.io/docs/specs/semconv/cicd/cicd-spans/)
+(currently Release Candidate, so expect churn).
+
+Two gaps versus `githubreceiver`: no step-level spans (the stream carries no step data), and no repo
+name or actor login (identifiers only).
+
 ## Cleanup
 
 ```bash

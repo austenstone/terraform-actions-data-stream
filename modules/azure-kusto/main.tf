@@ -100,3 +100,23 @@ resource "azurerm_kusto_script" "schema" {
 
   depends_on = [azurerm_kusto_database_principal_assignment.deployer]
 }
+
+# Silver/gold/OTel layer. Split from the schema script so the raw table lands
+# even if you don't want the analytics, and so the KQL stays readable on its own.
+locals {
+  analytics = templatefile("${path.module}/kql/analytics.kql", {
+    table_name = var.table_name
+  })
+}
+
+resource "azurerm_kusto_script" "analytics" {
+  count = var.create_analytics ? 1 : 0
+
+  name                               = "actions-data-stream-analytics"
+  database_id                        = azurerm_kusto_database.this.id
+  script_content                     = local.analytics
+  continue_on_errors_enabled         = false
+  force_an_update_when_value_changed = sha256(local.analytics)
+
+  depends_on = [azurerm_kusto_script.schema]
+}

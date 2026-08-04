@@ -1,0 +1,143 @@
+// Analytics layer for the Actions Data Stream.
+//
+// The stream emits four event types. Runs and jobs each arrive as a *pair* of
+// events (created, then completed) separated by however long the work took.
+// Every useful question ("how long did this queue?", "what failed?") therefore
+// needs those pairs collapsed into one row first.
+//
+//   bronze  ${table_name}   raw envelope, exactly as delivered
+//   silver  Jobs / Runs     materialized views, one row per job / run
+//   gold    JobFacts()      typed + derived columns, ready to query
+//           RunFacts()
+//   otel    OtelSpans()     OTel cicd.* spans with githubreceiver-compatible IDs
+//
+// Materialized views are used rather than update policies because the two halves
+// of a pair can be minutes apart; an update policy only sees one row at a time.
+//
+// NOTE ON IDEMPOTENCY: backfill is a create-only property, so `.create-or-alter
+// materialized-view with (backfill=true, ...)` succeeds the first time and then
+// fails on every subsequent run with "Unsupported property in materialized view
+// alter command". `.create ifnotexists` is used instead so re-applying is a
+// no-op. The tradeoff: changing a view definition later needs a manual
+// `.alter materialized-view` (or a drop and re-create to re-backfill).
+
+// ---------------------------------------------------------------- silver
+
+.create ifnotexists materialized-view with (backfill=true, docString="One row per job") Jobs on table ${table_name} {
+    ${table_name}
+    | where eventType in ("workflow_job_created", "workflow_job_completed")
+    | extend job_id = tolong(eventData.job_id)
+    | summarize
+        queued_at    = minif(eventTimestamp, eventType == "workflow_job_created"),
+        completed_ev = arg_max(iff(eventType == "workflow_job_completed", eventTimestamp, datetime(null)), eventData)
+      by job_id
+}
+
+.create ifnotexists materialized-view with (backfill=true, docString="One row per run") Runs on table ${table_name} {
+    ${table_name}
+    | where eventType in ("workflow_run_created", "workflow_run_completed")
+    | extend run_id = tolong(eventData.workflow_run_id)
+    | summarize
+        created_at   = minif(eventTimestamp, eventType == "workflow_run_created"),
+        completed_ev = arg_max(iff(eventType == "workflow_run_completed", eventTimestamp, datetime(null)), eventData)
+      by run_id
+}
+
+// ------------------------------------------------------------------ gold
+
+// queue_seconds is measured from the created event to job_started_at. A small
+// share of jobs (~5% observed) come out negative because the created event can
+// be emitted slightly after the job actually starts. Filter those out of
+// percentiles rather than clamping, so the bias stays visible.
+.create-or-alter function with (docString="One row per completed job, typed and derived", folder="gold") JobFacts() {
+    Jobs
+    | where isnotnull(completed_ev)
+    | extend
+        started_at    = todatetime(eventData.job_started_at),
+        finished_at   = todatetime(eventData.job_completed_at),
+        conclusion    = tostring(eventData.job_conclusion),
+        job_key       = tostring(eventData.job_key),
+        labels        = tostring(eventData.job_labels),
+        runner_group  = tostring(eventData.runner_group_name),
+        runner_name   = tostring(eventData.runner_name),
+        check_run_id  = tolong(eventData.check_run_id),
+        repository_id = tolong(eventData.repository_id),
+        run_id        = tolong(eventData.workflow_run_id),
+        attempt       = toint(eventData.workflow_run_attempt),
+        actor_id      = tolong(eventData.workflow_run_actor_id)
+    | extend
+        job_name      = tostring(split(job_key, ".")[0]),
+        queue_seconds = datetime_diff("second", started_at, queued_at),
+        exec_seconds  = datetime_diff("second", finished_at, started_at),
+        runner_kind   = case(runner_group == "GitHub Actions", "GHR", isempty(runner_group), "unknown", "SHR")
+    | project job_id, check_run_id, run_id, repository_id, actor_id, attempt, job_name, job_key,
+              queued_at, started_at, finished_at, conclusion, labels, runner_group, runner_name,
+              runner_kind, queue_seconds, exec_seconds
+}
+
+.create-or-alter function with (docString="One row per completed run, typed and derived", folder="gold") RunFacts() {
+    Runs
+    | where isnotnull(completed_ev)
+    | extend
+        repository_id = tolong(eventData.repository_id),
+        workflow_name = tostring(eventData.workflow.name),
+        workflow_path = tostring(eventData.workflow_file_path),
+        trigger       = tostring(eventData.workflow_run_event),
+        branch        = tostring(eventData.workflow_run_head_branch),
+        conclusion    = tostring(eventData.workflow_run_conclusion),
+        attempt       = toint(eventData.workflow_run_attempt),
+        actor_id      = tolong(eventData.workflow_run_actor_id)
+    | extend wall_seconds = datetime_diff("second", completed_ev, created_at)
+    | project run_id, repository_id, actor_id, attempt, created_at, completed_at = completed_ev,
+              wall_seconds, conclusion, workflow_name, workflow_path, trigger, branch
+}
+
+// ------------------------------------------------------------------ otel
+//
+// Span and trace IDs are hashed the same way the OpenTelemetry Collector's
+// githubreceiver hashes them, so spans emitted from here line up with spans
+// emitted from inside a runner by run-with-telemetry. Attribute names follow
+// the OTel cicd.* semantic conventions (Release Candidate as of 2026).
+//
+// Not emitted: step-level spans. The stream carries no step data.
+
+.create-or-alter function with (docString="OTel cicd.* spans, githubreceiver-compatible IDs", folder="otel") OtelSpans() {
+    let runs = RunFacts()
+      | project trace_id  = substring(hash_sha256(strcat(run_id, attempt, "t")), 0, 32),
+                span_id   = substring(hash_sha256(strcat(run_id, attempt, "s")), 16, 16),
+                parent_id = "",
+                span_kind = "SERVER",
+                name      = strcat("RUN ", workflow_name),
+                start_time = created_at, end_time = completed_at,
+                run_id, attempt, repository_id,
+                ["cicd.pipeline.name"]   = workflow_name,
+                ["cicd.pipeline.run.id"] = tostring(run_id),
+                ["cicd.pipeline.result"] = conclusion,
+                ["vcs.ref.head.name"]    = branch;
+    let jobs = JobFacts()
+      | project trace_id  = substring(hash_sha256(strcat(run_id, attempt, "t")), 0, 32),
+                span_id   = substring(hash_sha256(strcat(check_run_id, "-j")), 16, 16),
+                parent_id = substring(hash_sha256(strcat(run_id, attempt, "s")), 16, 16),
+                span_kind = "INTERNAL",
+                name      = job_name,
+                start_time = started_at, end_time = finished_at,
+                run_id, attempt, repository_id,
+                ["cicd.pipeline.task.name"]       = job_name,
+                ["cicd.pipeline.task.run.id"]     = tostring(check_run_id),
+                ["cicd.pipeline.task.run.result"] = conclusion,
+                ["cicd.worker.name"]              = runner_name;
+    let queues = JobFacts()
+      | where queue_seconds >= 0
+      | project trace_id  = substring(hash_sha256(strcat(run_id, attempt, "t")), 0, 32),
+                span_id   = substring(hash_sha256(strcat(check_run_id, "-q")), 16, 16),
+                parent_id = substring(hash_sha256(strcat(check_run_id, "-j")), 16, 16),
+                span_kind = "INTERNAL",
+                name      = strcat("queue ", job_name),
+                start_time = queued_at, end_time = started_at,
+                run_id, attempt, repository_id,
+                ["cicd.pipeline.task.name"]       = job_name,
+                ["cicd.pipeline.task.run.id"]     = tostring(check_run_id),
+                ["cicd.pipeline.task.run.result"] = "success",
+                ["cicd.worker.name"]              = runner_name;
+    union runs, jobs, queues
+}
