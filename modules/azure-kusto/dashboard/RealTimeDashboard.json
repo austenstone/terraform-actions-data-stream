@@ -249,9 +249,48 @@
         "kind": "inline",
         "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
       },
-      "text": "RunFacts()\n| where created_at > ago(7d)\n| summarize by workflow_name\n| project value = workflow_name, label = workflow_name\n| order by label asc",
-      "id": "d5718ab8-598c-596c-8b82-0f77ca5a2a08",
-      "usedVariables": []
+      "text": "let _ev = materialize(ActionsEvents\n| where eventTimestamp between (_startTime .. _endTime));\n// count()-minus-dcount() is NOT a duplicate detector: dcount is HyperLogLog and\n// was off by 51 on 21,915 rows even at accuracy 4. Count the collisions instead.\nlet _dupes = toscalar(_ev | summarize c = count() by eventUuid | summarize countif(c > 1));\nlet _dropped = toscalar(StuckRuns()\n    | where created_at between (_startTime .. _endTime)\n    | summarize countif(likely_dropped));\nlet _skipped = toscalar(JobFacts()\n    | where queued_at between (_startTime .. _endTime)\n    | summarize round(100.0 * countif(not(ran)) / count(), 1));\n_ev\n| extend lag_s = todouble(datetime_diff(\"millisecond\", ingestion_time(), eventTimestamp)) / 1000.0\n| summarize events = count(),\n            p95 = round(percentile(iff(lag_s >= 0, lag_s, real(null)), 95), 1)\n| extend Rows = pack_array(\n    pack_array(\"Events ingested\", tostring(events)),\n    pack_array(\"Ingest lag p95\", strcat(tostring(p95), \" s\")),\n    pack_array(\"Duplicate events\", tostring(_dupes)),\n    pack_array(\"Dropped completions\", tostring(_dropped)),\n    pack_array(\"Jobs skipped\", strcat(tostring(_skipped), \" %\")))\n| mv-expand Rows\n| project title = tostring(Rows[0]), value = tostring(Rows[1])",
+      "id": "bb46560e-0632-50c2-a7c9-614a055a2550",
+      "usedVariables": [
+        "_endTime",
+        "_startTime"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "let _ev = materialize(ActionsEvents\n| where eventTimestamp between (_startTime .. _endTime));\n_ev\n| extend lag_s = todouble(datetime_diff(\"millisecond\", ingestion_time(), eventTimestamp)) / 1000.0\n| where lag_s >= 0\n| summarize p50 = round(percentile(lag_s, 50), 2),\n            p95 = round(percentile(lag_s, 95), 2),\n            p99 = round(percentile(lag_s, 99), 2)\n    by timestamp = bin(eventTimestamp, 10m)\n| order by timestamp asc",
+      "id": "9d61f32d-e7aa-5d1d-824a-d5228375a2a6",
+      "usedVariables": [
+        "_endTime",
+        "_startTime"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "let _ev = materialize(ActionsEvents\n| where eventTimestamp between (_startTime .. _endTime));\n// Every created event should eventually be matched by a completed one. Runs that\n// dispatch no job never emit a completion at all -- see issue #8. A small negative\n// on Jobs is a window-boundary artifact, not a leak.\n_ev\n| summarize c = count() by eventType\n| extend entity = iff(eventType startswith \"workflow_run\", \"Runs\", \"Jobs\"),\n         phase = extract(@\"_(created|completed)$\", 1, eventType)\n| summarize opened = sumif(c, phase == \"created\"), closed = sumif(c, phase == \"completed\") by entity\n| extend never_closed = opened - closed,\n         leak_pct = round(100.0 * (opened - closed) / opened, 2)\n| order by entity asc",
+      "id": "1a8714e5-2059-597a-8981-72c7ab1975a2",
+      "usedVariables": [
+        "_endTime",
+        "_startTime"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "StuckRuns()\n| where created_at between (_startTime .. _endTime)\n| where likely_dropped\n| project run_id, created_at, open_for = format_timespan(age, \"d.hh:mm\"), has_jobs\n| order by created_at desc",
+      "id": "0d2c6bcf-f41b-5a00-aa59-e5b789d16aa4",
+      "usedVariables": [
+        "_endTime",
+        "_startTime"
+      ]
     }
   ],
   "tiles": [
@@ -798,6 +837,160 @@
       },
       "visualOptions": {},
       "markdownText": "Sourced from the **GitHub Actions Data Stream** (preview). Every tile honours the time range and workflow filters above.\n\n- **Skipped jobs are excluded from timings.** They arrive with all-zero durations and are ~40% of rows, so leaving them in drags every average toward zero.\n- **Negative queue times are dropped, not clamped.** `workflow_job_created` sometimes lands after the job started. Clamping to zero would hide the bias; dropping keeps the p50 honest.\n- **These are not billable minutes.** The stream carries no cost fields. Durations are wall clock, and self-hosted time is free.\n- **Names come from the stream, IDs do not resolve.** Repositories and actors are numeric ids only; join the REST API if you need `owner/repo`."
+    },
+    {
+      "id": "6e12fd59-a3a4-5989-b1ae-834828463d5e",
+      "title": "Stream health",
+      "description": "Delivery and data-quality signal for the selected window",
+      "visualType": "multistat",
+      "pageId": "f86dc82b-2ec7-5374-9f0d-1831ef704d2f",
+      "layout": {
+        "x": 0,
+        "y": 0,
+        "width": 24,
+        "height": 6
+      },
+      "visualOptions": {
+        "multiStat__valueColumn": "value",
+        "multiStat__labelColumn": "title",
+        "multiStat__displayOrientation": "horizontal",
+        "multiStat__slot": {
+          "width": 5,
+          "height": 1
+        },
+        "multiStat__textSize": "auto",
+        "colorRules": [],
+        "colorRulesDisabled": true,
+        "colorStyle": "light"
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "bb46560e-0632-50c2-a7c9-614a055a2550"
+      }
+    },
+    {
+      "id": "dccc5bf3-8a40-57c4-9ec1-a0610d874ee8",
+      "title": "Ingestion lag",
+      "description": "Time from event to queryable, in seconds",
+      "visualType": "line",
+      "pageId": "f86dc82b-2ec7-5374-9f0d-1831ef704d2f",
+      "layout": {
+        "x": 0,
+        "y": 6,
+        "width": 12,
+        "height": 7
+      },
+      "visualOptions": {
+        "xColumn": "timestamp",
+        "yColumns": [
+          "p50",
+          "p95",
+          "p99"
+        ],
+        "seriesColumns": null,
+        "hideLegend": false,
+        "legendLocation": "bottom",
+        "multipleYAxes": {
+          "base": {
+            "id": "-1",
+            "columns": [],
+            "label": "",
+            "yAxisMaximumValue": null,
+            "yAxisMinimumValue": null,
+            "yAxisScale": "linear",
+            "horizontalLines": []
+          },
+          "additional": [],
+          "showMultiplePanels": false
+        },
+        "xColumnTitle": "",
+        "xAxisScale": "linear",
+        "verticalLine": "",
+        "selectedDataOnLoad": {
+          "all": false,
+          "limit": 10
+        },
+        "dataPointsTooltip": {
+          "all": false,
+          "limit": 10
+        },
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "9d61f32d-e7aa-5d1d-824a-d5228375a2a6"
+      }
+    },
+    {
+      "id": "e84a25b5-71f4-5b9e-b0d4-6c4810217073",
+      "title": "Completeness",
+      "description": "Created events that never got a completion",
+      "visualType": "table",
+      "pageId": "f86dc82b-2ec7-5374-9f0d-1831ef704d2f",
+      "layout": {
+        "x": 12,
+        "y": 6,
+        "width": 12,
+        "height": 7
+      },
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "colorRules": [],
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "1a8714e5-2059-597a-8981-72c7ab1975a2"
+      }
+    },
+    {
+      "id": "e067836f-e8e9-5652-b66d-ebf54367fac6",
+      "title": "Runs that never completed",
+      "description": "Dispatched no job, so no completion is coming",
+      "visualType": "table",
+      "pageId": "f86dc82b-2ec7-5374-9f0d-1831ef704d2f",
+      "layout": {
+        "x": 0,
+        "y": 13,
+        "width": 24,
+        "height": 8
+      },
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "colorRules": [],
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "0d2c6bcf-f41b-5a00-aa59-e5b789d16aa4"
+      }
+    },
+    {
+      "id": "d471865a-ea88-5692-9fe7-23edb3685a45",
+      "title": "How to read this",
+      "visualType": "markdownCard",
+      "pageId": "f86dc82b-2ec7-5374-9f0d-1831ef704d2f",
+      "layout": {
+        "x": 0,
+        "y": 21,
+        "width": 24,
+        "height": 9
+      },
+      "markdownText": "### Why this page exists\n\n`sink_health` only advances on connection tests, so a sink that has delivered nothing\nfor an hour still reports `healthy`. **Health is failure-fast but success-blind** --\nthis page is the success signal.\n\n- **Ingest lag** is `ingestion_time() - eventTimestamp`. Measured p50 ~5s, p95 ~7s.\n  A sustained climb means the destination is backing up, not that GitHub is slow.\n- **Duplicate events** should be 0. Delivery is at-least-once by contract, so a\n  non-zero value here is expected behaviour, not an incident -- dedupe on `eventUuid`.\n- **Dropped completions** are runs that emitted `created` and never `completed`\n  because they dispatched no job. ~1.2% of runs. They are not stuck, they are gone.\n- **Jobs skipped** is ~40% on a busy org. Skipped jobs carry all-zero timings and\n  must be filtered before any duration maths -- `JobFacts()` exposes `ran` for this.\n\nZero events with a `healthy` sink is the alert worth wiring: `ActionsEvents | where\neventTimestamp > ago(30m) | count`.",
+      "visualOptions": {}
     }
   ],
   "pages": [
@@ -812,6 +1005,10 @@
     {
       "name": "Where time goes",
       "id": "8232ede9-1c35-517b-bac9-63a61c479428"
+    },
+    {
+      "name": "Stream health",
+      "id": "f86dc82b-2ec7-5374-9f0d-1831ef704d2f"
     }
   ],
   "embeddedApps": []
