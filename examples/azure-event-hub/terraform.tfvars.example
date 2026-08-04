@@ -1,0 +1,9 @@
+subscription_id   = "00000000-0000-0000-0000-000000000000"
+github_owner_id   = "1234567"
+github_owner_type = "organization"
+namespace_name    = "myactionsdatastream"
+location          = "eastus"
+
+tags = {
+  purpose = "actions-data-stream"
+}

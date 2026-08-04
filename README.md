@@ -24,9 +24,16 @@ setup is what these modules do.
 | [`modules/azure-identity`](modules/azure-identity) | User-assigned managed identity + federated credential. Used by the other Azure modules. |
 | [`modules/azure-blob`](modules/azure-blob) | Storage account, container, `Storage Blob Data Contributor` role assignment. |
 | [`modules/azure-kusto`](modules/azure-kusto) | Kusto cluster, database, table + ingestion mapping, `Ingestor` role assignment. |
+| [`modules/azure-event-hub`](modules/azure-event-hub) | Event Hubs namespace, hub, `Azure Event Hubs Data Sender` role assignment. |
 | [`modules/aws-s3`](modules/aws-s3) | OIDC provider, IAM role with a scoped trust policy, S3 bucket, write policy. |
 
 Each module outputs a `sink_config` object you paste straight into the data stream configuration.
+
+> **Only `azure-kusto` can be deployed by a plain Contributor.** Kusto grants data-plane access
+> through a *Kusto principal assignment*, which Contributor can create. Blob and Event Hubs both need
+> an Azure RBAC role assignment, which requires **User Access Administrator or Owner**. If you only
+> have Contributor, set `create_role_assignment = false` and hand the `role_assignment_command`
+> output to whoever does. Worth knowing before you book the meeting.
 
 ## Known preview issues
 
@@ -44,6 +51,9 @@ most time:
   reports failures well, but `last_success_at` only tracks connection tests, so a busy sink and a
   silent one look identical — and an unhealthy sink doesn't self-heal. See
   [Operating it](#operating-it).
+- [#12](https://github.com/austenstone/terraform-actions-data-stream/issues/12) — Event Hubs sends
+  over the 2014-era Service Bus REST API with no partition key, so events land round-robin and
+  per-run ordering is impossible.
 
 Plans and next steps are in
 [#7](https://github.com/austenstone/terraform-actions-data-stream/issues/7).
@@ -111,6 +121,21 @@ envelope:
 | `eventData` | `dynamic` |
 
 `eventData` is `dynamic` because its shape differs per event type.
+
+### Azure Event Hubs
+
+```bash
+cd examples/azure-event-hub
+terraform init
+terraform apply
+```
+
+Standard SKU by default — Basic caps retention at one day and allows a single consumer group, which
+is usually too tight for anything real. The hub's `partition_count` only buys consumer parallelism:
+the data stream sends over the legacy Service Bus REST endpoint (`/messages?api-version=2014-01`)
+and exposes no partition key, so events land round-robin. Combined with the documented lack of
+ordering guarantees, **do not expect per-repo or per-run ordering out of Event Hubs**, even with a
+single consumer. See [#12](https://github.com/austenstone/terraform-actions-data-stream/issues/12).
 
 ### AWS S3
 
