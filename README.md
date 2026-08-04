@@ -28,6 +28,22 @@ setup is what these modules do.
 
 Each module outputs a `sink_config` object you paste straight into the data stream configuration.
 
+## Known preview issues
+
+Data Stream is a preview feature and has rough edges. The ones I've hit are logged as
+[`preview-bug`](https://github.com/austenstone/terraform-actions-data-stream/issues?q=is%3Aissue+label%3Apreview-bug)
+issues here — worth a skim before you debug something that isn't your fault. The two that cost the
+most time:
+
+- [#1](https://github.com/austenstone/terraform-actions-data-stream/issues/1) — Kusto sinks **500**
+  instead of returning a validation error when `ingestion_uri` is missing, and it's required even for
+  streaming ingestion.
+- [#2](https://github.com/austenstone/terraform-actions-data-stream/issues/2) — a sink reports
+  `active` while delivering nothing, because event emission is behind a *second* feature flag.
+
+Plans and next steps are in
+[#7](https://github.com/austenstone/terraform-actions-data-stream/issues/7).
+
 ## The part everyone gets wrong
 
 The subject claim. It is:
