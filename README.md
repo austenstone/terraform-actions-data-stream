@@ -349,13 +349,47 @@ INTERNAL     Dependabot              48000ms   parent=dacfe926…
 INTERNAL       queue Dependabot       1389ms   parent=5c869269…
 ```
 
-That means you can get OTel-compliant CI traces into Tempo, Jaeger, Honeycomb, or Datadog **without
-hosting a webhook endpoint or running a collector**. Attributes follow the
+That means you can drop the **webhook receiver** — no public endpoint, no shared secret, no delivery
+retries to babysit. Attributes follow the
 [`cicd.*` semantic conventions](https://opentelemetry.io/docs/specs/semconv/cicd/cicd-spans/)
 (currently Release Candidate, so expect churn).
 
-Two gaps versus `githubreceiver`: no step-level spans (the stream carries no step data), and no repo
-name or actor login (identifiers only).
+Be clear about what this is, though: `OtelSpans()` is a **query**, not an exporter. It shapes the
+data into spans; something still has to read them out of Kusto and push them to your tracing backend
+— a scheduled job, a Grafana ADX datasource, or a collector with a Kusto receiver. The stream
+replaces the ingest side of `githubreceiver`, not the egress side.
+
+Two data gaps versus `githubreceiver`: no step-level spans (the stream carries no step data), and no
+repo name or actor login (identifiers only).
+
+## Dashboard
+
+The Kusto module ships an importable dashboard, already pointed at your cluster and database:
+
+```bash
+terraform output -raw dashboard_json > dashboard.json
+```
+
+Import it in [Kusto Web Explorer](https://dataexplorer.azure.com) (**Dashboards → New dashboard →
+Import from file**), or into Fabric with `fab import`. Three pages, fifteen tiles, built entirely on
+the gold functions:
+
+| Page | Answers |
+|---|---|
+| **Overview** | Is CI healthy right now? Throughput, outcomes, busiest workflows, what triggers them. |
+| **Queue & runners** | Are we runner-constrained? Queue time by label, concurrency, slowest jobs to get a runner, runner-group utilization. |
+| **Where time goes** | What is CI wasting? Failure hotspots, orchestration overhead, minutes lost queueing, longest jobs. |
+
+Both filters — the time range and a workflow multi-select — are wired to every tile.
+
+The source of truth is
+[`modules/azure-kusto/dashboard/RealTimeDashboard.json`](modules/azure-kusto/dashboard/RealTimeDashboard.json)
+with `${cluster_uri}` / `${database}` placeholders; Terraform renders it. Every tile query has been
+executed against a live cluster, so an empty tile means no matching data, not a broken query.
+
+One thing the dashboard cannot show you: **cost**. The stream carries no billable minutes and no
+runner SKU. Every duration is wall clock. `job_labels` and `runner_group_name` are the only runner
+signal, which is enough to compare GHR-vs-SHR queue behaviour but not to price it.
 
 ## Cleanup
 

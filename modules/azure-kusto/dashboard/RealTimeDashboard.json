@@ -1,0 +1,826 @@
+{
+  "$schema": "https://dataexplorer.azure.com/static/d/schema/77/dashboard.json",
+  "schema_version": 77,
+  "title": "GitHub Actions \u2014 Data Stream",
+  "autoRefresh": {
+    "enabled": true,
+    "defaultInterval": "5m",
+    "minInterval": "1m"
+  },
+  "baseQueries": [],
+  "dataSources": [
+    {
+      "id": "aa000000-0000-0000-0000-0000000000d5",
+      "name": "ActionsDataStream",
+      "kind": "manual-kusto",
+      "clusterUri": "${cluster_uri}",
+      "database": "${database}"
+    }
+  ],
+  "parameters": [
+    {
+      "id": "4151b90a-71dd-4e79-ba22-c08e5b33d9ad",
+      "displayName": "Time range",
+      "description": "",
+      "kind": "duration",
+      "beginVariableName": "_startTime",
+      "endVariableName": "_endTime",
+      "defaultValue": {
+        "kind": "dynamic",
+        "count": 1,
+        "unit": "days"
+      },
+      "showOnPages": {
+        "kind": "all"
+      }
+    },
+    {
+      "id": "446e241c-1ea1-4ced-9ba6-0a319bbc75db",
+      "displayName": "Workflow",
+      "description": "",
+      "kind": "string",
+      "variableName": "_workflow",
+      "selectionType": "array",
+      "includeAllOption": true,
+      "defaultValue": {
+        "kind": "all"
+      },
+      "dataSource": {
+        "kind": "query",
+        "queryRef": {
+          "kind": "query",
+          "queryId": "d5718ab8-598c-596c-8b82-0f77ca5a2a08"
+        },
+        "columns": {
+          "value": "value",
+          "label": "label"
+        }
+      },
+      "showOnPages": {
+        "kind": "all"
+      }
+    }
+  ],
+  "queries": [
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "RunFacts()\n| where created_at between (_startTime .. _endTime)\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow)\n| summarize runs = count(),\n            ok = countif(conclusion == \"success\"),\n            done = countif(isnotempty(conclusion)),\n            repos = dcount(repository_id),\n            workflows = dcount(workflow_name)\n| extend p = toscalar((JobFacts()\n| where queued_at between (_startTime .. _endTime)\n| lookup kind=leftouter (RunFacts() | project run_id, attempt, workflow_name) on run_id, attempt\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow)\n    | where runner_kind != \"unknown\"\n    | where queue_seconds >= 0\n    | summarize percentile(queue_seconds, 95)))\n| extend Rows = pack_array(\n    pack_array(\"Runs\", tostring(runs)),\n    pack_array(\"Success rate\", iff(done == 0, \"--\", strcat(tostring(round(100.0 * ok / done, 1)), \"%\"))),\n    pack_array(\"Queue p95\", strcat(tostring(coalesce(p, 0)), \"s\")),\n    pack_array(\"Active repos\", tostring(repos)),\n    pack_array(\"Workflows\", tostring(workflows)))\n| mv-expand Rows\n| project title = tostring(Rows[0]), value = tostring(Rows[1])",
+      "id": "c5b5f7cc-6a45-51dd-9b7b-9e488d54ba66",
+      "usedVariables": [
+        "_endTime",
+        "_startTime",
+        "_workflow"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "RunFacts()\n| where created_at between (_startTime .. _endTime)\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow)\n| where isnotempty(conclusion)\n| summarize runs = count() by conclusion, bin = bin(created_at, (_endTime - _startTime) / 60)\n| order by bin asc",
+      "id": "f12afa39-1ac4-5574-a7da-d29d64217848",
+      "usedVariables": [
+        "_endTime",
+        "_startTime",
+        "_workflow"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "RunFacts()\n| where created_at between (_startTime .. _endTime)\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow)\n| where isnotempty(conclusion)\n| summarize runs = count() by conclusion\n| order by runs desc",
+      "id": "350b063f-5c64-5732-843e-edfc27391d09",
+      "usedVariables": [
+        "_endTime",
+        "_startTime",
+        "_workflow"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "RunFacts()\n| where created_at between (_startTime .. _endTime)\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow)\n| where isnotempty(conclusion)\n| summarize Runs = count(),\n            [\"Fail %\"] = round(100.0 * countif(conclusion == \"failure\") / count(), 1),\n            [\"Total min\"] = round(sum(wall_seconds) / 60.0, 1),\n            [\"Median s\"] = percentile(wall_seconds, 50),\n            [\"p95 s\"] = percentile(wall_seconds, 95)\n  by Workflow = workflow_name\n| top 20 by [\"Total min\"] desc",
+      "id": "bc267af8-a7ee-5782-a23e-84291d2a43de",
+      "usedVariables": [
+        "_endTime",
+        "_startTime",
+        "_workflow"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "RunFacts()\n| where created_at between (_startTime .. _endTime)\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow)\n| summarize runs = count() by trigger\n| top 12 by runs desc",
+      "id": "538ff27b-43ff-542b-8600-e0b5f026c0a2",
+      "usedVariables": [
+        "_endTime",
+        "_startTime",
+        "_workflow"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "JobFacts()\n| where queued_at between (_startTime .. _endTime)\n| lookup kind=leftouter (RunFacts() | project run_id, attempt, workflow_name) on run_id, attempt\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow)\n| where runner_kind != \"unknown\"\n| where queue_seconds >= 0\n| extend Label = tostring(parse_json(labels)[0])\n| summarize Jobs = count(),\n            [\"Queue p50\"] = percentile(queue_seconds, 50),\n            [\"Queue p95\"] = percentile(queue_seconds, 95),\n            [\"Queue max\"] = max(queue_seconds),\n            [\"Exec p50\"] = percentile(exec_seconds, 50),\n            [\"Runners seen\"] = dcount(runner_name)\n  by Label, Kind = runner_kind\n| where Jobs >= 10\n| order by [\"Queue p95\"] desc",
+      "id": "ed3dedb8-0f5c-52ce-8f03-94aab0c66b68",
+      "usedVariables": [
+        "_endTime",
+        "_startTime",
+        "_workflow"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "JobFacts()\n| where queued_at between (_startTime .. _endTime)\n| lookup kind=leftouter (RunFacts() | project run_id, attempt, workflow_name) on run_id, attempt\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow)\n| where runner_kind != \"unknown\"\n| where queue_seconds >= 0\n| summarize p50 = percentile(queue_seconds, 50), p95 = percentile(queue_seconds, 95)\n  by bin = bin(queued_at, (_endTime - _startTime) / 60)\n| order by bin asc",
+      "id": "59dab0d2-713f-5418-98c8-4445fb75e114",
+      "usedVariables": [
+        "_endTime",
+        "_startTime",
+        "_workflow"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "JobFacts()\n| where queued_at between (_startTime .. _endTime)\n| lookup kind=leftouter (RunFacts() | project run_id, attempt, workflow_name) on run_id, attempt\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow)\n| where runner_kind != \"unknown\"\n| summarize running = dcount(runner_name) by runner_kind, bin = bin(started_at, (_endTime - _startTime) / 60)\n| order by bin asc",
+      "id": "30e47506-6e83-5b9c-bfcd-18700d19fcd4",
+      "usedVariables": [
+        "_endTime",
+        "_startTime",
+        "_workflow"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "JobFacts()\n| where queued_at between (_startTime .. _endTime)\n| lookup kind=leftouter (RunFacts() | project run_id, attempt, workflow_name) on run_id, attempt\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow)\n| where runner_kind != \"unknown\"\n| where queue_seconds >= 0\n| extend Label = tostring(parse_json(labels)[0])\n| project Job = job_name, Workflow = workflow_name, Label,\n          [\"Queued s\"] = queue_seconds, [\"Ran s\"] = exec_seconds,\n          Conclusion = conclusion, When = queued_at\n| top 20 by [\"Queued s\"] desc",
+      "id": "331c6221-793a-515d-aa4f-ce7871f5530d",
+      "usedVariables": [
+        "_endTime",
+        "_startTime",
+        "_workflow"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "JobFacts()\n| where queued_at between (_startTime .. _endTime)\n| lookup kind=leftouter (RunFacts() | project run_id, attempt, workflow_name) on run_id, attempt\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow)\n| where runner_kind != \"unknown\"\n| summarize Jobs = count(), Runners = dcount(runner_name),\n            [\"Queue p95\"] = percentile(queue_seconds, 95),\n            [\"Busy min\"] = round(sum(exec_seconds) / 60.0, 1)\n  by Group = runner_group, Kind = runner_kind\n| top 20 by Jobs desc",
+      "id": "06f1ae7b-f47c-58c2-b047-dab6b7b5b2b8",
+      "usedVariables": [
+        "_endTime",
+        "_startTime",
+        "_workflow"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "RunFacts()\n| where created_at between (_startTime .. _endTime)\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow)\n| where isnotempty(conclusion)\n| summarize Runs = count(), Failed = countif(conclusion == \"failure\"),\n            [\"Wasted min\"] = round(sumif(wall_seconds, conclusion == \"failure\") / 60.0, 1)\n  by Workflow = workflow_name\n| where Failed > 0\n| extend [\"Fail %\"] = round(100.0 * Failed / Runs, 1)\n| project Workflow, Runs, Failed, [\"Fail %\"], [\"Wasted min\"]\n| top 20 by [\"Wasted min\"] desc",
+      "id": "7bcc2de7-5728-5083-989b-9af2257593e8",
+      "usedVariables": [
+        "_endTime",
+        "_startTime",
+        "_workflow"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "RunFacts()\n| where created_at between (_startTime .. _endTime)\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow)\n| where conclusion == \"success\" and wall_seconds > 0\n| join kind=inner (JobFacts()\n| where queued_at between (_startTime .. _endTime)\n| lookup kind=leftouter (RunFacts() | project run_id, attempt, workflow_name) on run_id, attempt\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow)\n    | where runner_kind != \"unknown\"\n    | summarize longest = max(exec_seconds), jobs = count() by run_id, attempt) on run_id, attempt\n| extend overhead = wall_seconds - longest\n| where overhead >= 0\n| summarize Runs = count(), Jobs = percentile(jobs, 50),\n            [\"Overhead p50\"] = percentile(overhead, 50),\n            [\"Overhead p95\"] = percentile(overhead, 95),\n            [\"Total min\"] = round(sum(overhead) / 60.0, 1)\n  by Workflow = workflow_name\n| where Runs >= 5\n| top 15 by [\"Total min\"] desc",
+      "id": "1db02066-6f70-5068-801a-95c038efc70e",
+      "usedVariables": [
+        "_endTime",
+        "_startTime",
+        "_workflow"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "JobFacts()\n| where queued_at between (_startTime .. _endTime)\n| lookup kind=leftouter (RunFacts() | project run_id, attempt, workflow_name) on run_id, attempt\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow)\n| where runner_kind != \"unknown\"\n| where queue_seconds >= 0\n| summarize Jobs = count(),\n            [\"Waiting min\"] = round(sum(queue_seconds) / 60.0, 1),\n            [\"Working min\"] = round(sum(exec_seconds) / 60.0, 1),\n            [\"Queue p95\"] = percentile(queue_seconds, 95)\n  by Workflow = workflow_name\n| where [\"Waiting min\"] > 0\n| extend [\"Wait %\"] = round(100.0 * [\"Waiting min\"] / ([\"Waiting min\"] + [\"Working min\"]), 1)\n| project Workflow, Jobs, [\"Waiting min\"], [\"Working min\"], [\"Wait %\"], [\"Queue p95\"]\n| top 15 by [\"Waiting min\"] desc",
+      "id": "066990d5-0503-5cb3-a95e-512350c64baf",
+      "usedVariables": [
+        "_endTime",
+        "_startTime",
+        "_workflow"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "JobFacts()\n| where queued_at between (_startTime .. _endTime)\n| lookup kind=leftouter (RunFacts() | project run_id, attempt, workflow_name) on run_id, attempt\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow)\n| where runner_kind != \"unknown\"\n| where exec_seconds > 0\n| summarize Runs = count(), [\"Exec p50\"] = percentile(exec_seconds, 50),\n            [\"Exec p95\"] = percentile(exec_seconds, 95),\n            [\"Total min\"] = round(sum(exec_seconds) / 60.0, 1),\n            [\"Fail %\"] = round(100.0 * countif(conclusion == \"failure\") / count(), 1)\n  by Job = job_name, Workflow = workflow_name\n| where Runs >= 3\n| top 25 by [\"Total min\"] desc",
+      "id": "dcb0caba-8e6c-554d-b761-71f422c3fca2",
+      "usedVariables": [
+        "_endTime",
+        "_startTime",
+        "_workflow"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "RunFacts()\n| where created_at > ago(7d)\n| summarize by workflow_name\n| project value = workflow_name, label = workflow_name\n| order by label asc",
+      "id": "d5718ab8-598c-596c-8b82-0f77ca5a2a08",
+      "usedVariables": []
+    }
+  ],
+  "tiles": [
+    {
+      "id": "2b9c565a-7e8a-4099-b89a-4555b50dc96a",
+      "title": "Health",
+      "visualType": "multistat",
+      "pageId": "page-1",
+      "layout": {
+        "x": 0,
+        "y": 0,
+        "width": 24,
+        "height": 6
+      },
+      "visualOptions": {
+        "colorRulesDisabled": false,
+        "colorRules": [],
+        "colorStyle": "light",
+        "multiStat__valueColumn": "value",
+        "multiStat__labelColumn": "title",
+        "multiStat__displayOrientation": "horizontal",
+        "multiStat__textSize": "auto",
+        "multiStat__slot": {
+          "width": 5,
+          "height": 1
+        },
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "c5b5f7cc-6a45-51dd-9b7b-9e488d54ba66"
+      },
+      "description": "Selected range"
+    },
+    {
+      "id": "4e330c8d-e567-4dd3-9fd4-b311b2e62502",
+      "title": "Throughput",
+      "visualType": "line",
+      "pageId": "page-1",
+      "layout": {
+        "x": 0,
+        "y": 6,
+        "width": 12,
+        "height": 8
+      },
+      "visualOptions": {
+        "xColumn": "bin",
+        "yColumns": [
+          "runs"
+        ],
+        "seriesColumns": [
+          "conclusion"
+        ],
+        "hideLegend": false,
+        "legendLocation": "bottom",
+        "xColumnTitle": "",
+        "xAxisScale": "linear",
+        "yAxisScale": "linear",
+        "verticalLine": "",
+        "multipleYAxes": {
+          "base": {
+            "id": "-1",
+            "columns": [],
+            "label": "",
+            "yAxisMaximumValue": null,
+            "yAxisMinimumValue": null,
+            "yAxisScale": "linear",
+            "horizontalLines": []
+          },
+          "additional": [],
+          "showMultiplePanels": false
+        },
+        "selectedDataOnLoad": {
+          "all": false,
+          "limit": 10
+        },
+        "dataPointsTooltip": {
+          "all": false,
+          "limit": 10
+        },
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "f12afa39-1ac4-5574-a7da-d29d64217848"
+      },
+      "description": "Runs completed, by outcome"
+    },
+    {
+      "id": "2deb94fc-9ce2-40ac-b2cf-2b92ffebc6c4",
+      "title": "Outcomes",
+      "visualType": "pie",
+      "pageId": "page-1",
+      "layout": {
+        "x": 12,
+        "y": 6,
+        "width": 12,
+        "height": 8
+      },
+      "visualOptions": {
+        "xColumn": "conclusion",
+        "yColumns": [
+          "runs"
+        ],
+        "seriesColumns": null,
+        "hideLegend": false,
+        "legendLocation": "right",
+        "xColumnTitle": "",
+        "xAxisScale": "linear",
+        "yAxisScale": "linear",
+        "verticalLine": "",
+        "multipleYAxes": {
+          "base": {
+            "id": "-1",
+            "columns": [],
+            "label": "",
+            "yAxisMaximumValue": null,
+            "yAxisMinimumValue": null,
+            "yAxisScale": "linear",
+            "horizontalLines": []
+          },
+          "additional": [],
+          "showMultiplePanels": false
+        },
+        "selectedDataOnLoad": {
+          "all": false,
+          "limit": 10
+        },
+        "dataPointsTooltip": {
+          "all": false,
+          "limit": 10
+        },
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "350b063f-5c64-5732-843e-edfc27391d09"
+      },
+      "description": "Share of completed runs"
+    },
+    {
+      "id": "c20db8c5-16bc-42ae-9330-ed93dd338e94",
+      "title": "Busiest workflows",
+      "visualType": "table",
+      "pageId": "page-1",
+      "layout": {
+        "x": 0,
+        "y": 14,
+        "width": 12,
+        "height": 8
+      },
+      "visualOptions": {
+        "colorRulesDisabled": false,
+        "colorRules": [],
+        "colorStyle": "light",
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "bc267af8-a7ee-5782-a23e-84291d2a43de"
+      },
+      "description": "Ranked by total wall time"
+    },
+    {
+      "id": "9e6f09f7-b56e-4543-b15a-b8e452f9a506",
+      "title": "How runs are triggered",
+      "visualType": "stackedcolumn",
+      "pageId": "page-1",
+      "layout": {
+        "x": 12,
+        "y": 14,
+        "width": 12,
+        "height": 8
+      },
+      "visualOptions": {
+        "xColumn": "trigger",
+        "yColumns": [
+          "runs"
+        ],
+        "seriesColumns": null,
+        "hideLegend": true,
+        "legendLocation": "bottom",
+        "xColumnTitle": "",
+        "xAxisScale": "linear",
+        "yAxisScale": "linear",
+        "verticalLine": "",
+        "multipleYAxes": {
+          "base": {
+            "id": "-1",
+            "columns": [],
+            "label": "",
+            "yAxisMaximumValue": null,
+            "yAxisMinimumValue": null,
+            "yAxisScale": "linear",
+            "horizontalLines": []
+          },
+          "additional": [],
+          "showMultiplePanels": false
+        },
+        "selectedDataOnLoad": {
+          "all": false,
+          "limit": 10
+        },
+        "dataPointsTooltip": {
+          "all": false,
+          "limit": 10
+        },
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "538ff27b-43ff-542b-8600-e0b5f026c0a2"
+      },
+      "description": "Event that started the run"
+    },
+    {
+      "id": "835f6d96-211b-4dca-9558-3f9edb87762d",
+      "title": "Queue time by runner label",
+      "visualType": "table",
+      "pageId": "page-2",
+      "layout": {
+        "x": 0,
+        "y": 0,
+        "width": 24,
+        "height": 9
+      },
+      "visualOptions": {
+        "colorRulesDisabled": false,
+        "colorRules": [],
+        "colorStyle": "light",
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "ed3dedb8-0f5c-52ce-8f03-94aab0c66b68"
+      },
+      "description": "The tile to look at first. Wide p95-to-p50 gaps mean capacity starvation, not slow jobs."
+    },
+    {
+      "id": "e6a38483-82a7-4cc4-a958-07827562faf8",
+      "title": "Queue time trend",
+      "visualType": "line",
+      "pageId": "page-2",
+      "layout": {
+        "x": 0,
+        "y": 9,
+        "width": 12,
+        "height": 8
+      },
+      "visualOptions": {
+        "xColumn": "bin",
+        "yColumns": [
+          "p50",
+          "p95"
+        ],
+        "seriesColumns": null,
+        "hideLegend": false,
+        "legendLocation": "bottom",
+        "xColumnTitle": "",
+        "xAxisScale": "linear",
+        "yAxisScale": "linear",
+        "verticalLine": "",
+        "multipleYAxes": {
+          "base": {
+            "id": "-1",
+            "columns": [],
+            "label": "",
+            "yAxisMaximumValue": null,
+            "yAxisMinimumValue": null,
+            "yAxisScale": "linear",
+            "horizontalLines": []
+          },
+          "additional": [],
+          "showMultiplePanels": false
+        },
+        "selectedDataOnLoad": {
+          "all": false,
+          "limit": 10
+        },
+        "dataPointsTooltip": {
+          "all": false,
+          "limit": 10
+        },
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "59dab0d2-713f-5418-98c8-4445fb75e114"
+      },
+      "description": "Seconds spent waiting for a runner"
+    },
+    {
+      "id": "b5adaa4e-f65b-468e-8e30-6282c6fb2164",
+      "title": "Concurrency",
+      "visualType": "line",
+      "pageId": "page-2",
+      "layout": {
+        "x": 12,
+        "y": 9,
+        "width": 12,
+        "height": 8
+      },
+      "visualOptions": {
+        "xColumn": "bin",
+        "yColumns": [
+          "running"
+        ],
+        "seriesColumns": [
+          "runner_kind"
+        ],
+        "hideLegend": false,
+        "legendLocation": "bottom",
+        "xColumnTitle": "",
+        "xAxisScale": "linear",
+        "yAxisScale": "linear",
+        "verticalLine": "",
+        "multipleYAxes": {
+          "base": {
+            "id": "-1",
+            "columns": [],
+            "label": "",
+            "yAxisMaximumValue": null,
+            "yAxisMinimumValue": null,
+            "yAxisScale": "linear",
+            "horizontalLines": []
+          },
+          "additional": [],
+          "showMultiplePanels": false
+        },
+        "selectedDataOnLoad": {
+          "all": false,
+          "limit": 10
+        },
+        "dataPointsTooltip": {
+          "all": false,
+          "limit": 10
+        },
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "30e47506-6e83-5b9c-bfcd-18700d19fcd4"
+      },
+      "description": "Distinct runners busy per interval \u2014 the practical ceiling on throughput"
+    },
+    {
+      "id": "8bf8e002-5885-4a29-b9a8-1641a92d097f",
+      "title": "Slowest jobs to get a runner",
+      "visualType": "table",
+      "pageId": "page-2",
+      "layout": {
+        "x": 0,
+        "y": 17,
+        "width": 12,
+        "height": 8
+      },
+      "visualOptions": {
+        "colorRulesDisabled": false,
+        "colorRules": [],
+        "colorStyle": "light",
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "331c6221-793a-515d-aa4f-ce7871f5530d"
+      },
+      "description": "Worst queue waits in the window"
+    },
+    {
+      "id": "d6c08797-0ab0-49a3-bcd3-d95eefa2d8e3",
+      "title": "Runner groups",
+      "visualType": "table",
+      "pageId": "page-2",
+      "layout": {
+        "x": 12,
+        "y": 17,
+        "width": 12,
+        "height": 8
+      },
+      "visualOptions": {
+        "colorRulesDisabled": false,
+        "colorRules": [],
+        "colorStyle": "light",
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "06f1ae7b-f47c-58c2-b047-dab6b7b5b2b8"
+      },
+      "description": "Where the work actually landed"
+    },
+    {
+      "id": "4439f5da-fefc-4c3b-a134-610eaeda9a4a",
+      "title": "Failure hotspots",
+      "visualType": "table",
+      "pageId": "page-3",
+      "layout": {
+        "x": 0,
+        "y": 0,
+        "width": 24,
+        "height": 9
+      },
+      "visualOptions": {
+        "colorRulesDisabled": false,
+        "colorRules": [],
+        "colorStyle": "light",
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "7bcc2de7-5728-5083-989b-9af2257593e8"
+      },
+      "description": "Ranked by minutes burned on failed runs. A 100% fail rate is usually a broken workflow, not a flaky test."
+    },
+    {
+      "id": "768ee771-dc21-4e2c-8c18-11df185d9251",
+      "title": "Orchestration overhead",
+      "visualType": "table",
+      "pageId": "page-3",
+      "layout": {
+        "x": 0,
+        "y": 9,
+        "width": 12,
+        "height": 8
+      },
+      "visualOptions": {
+        "colorRulesDisabled": false,
+        "colorRules": [],
+        "colorStyle": "light",
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "1db02066-6f70-5068-801a-95c038efc70e"
+      },
+      "description": "Wall time minus the longest single job. This is queueing and serialization between jobs, not work."
+    },
+    {
+      "id": "ab44e53d-4fa1-42d8-b28d-39897f950d17",
+      "title": "Time lost waiting",
+      "visualType": "table",
+      "pageId": "page-3",
+      "layout": {
+        "x": 12,
+        "y": 9,
+        "width": 12,
+        "height": 8
+      },
+      "visualOptions": {
+        "colorRulesDisabled": false,
+        "colorRules": [],
+        "colorStyle": "light",
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "066990d5-0503-5cb3-a95e-512350c64baf"
+      },
+      "description": "Engineer wall-time burned queueing for a runner. A high wait share is a capacity problem, not a code problem."
+    },
+    {
+      "id": "2544454a-bd9d-4c01-ad8b-921fc0e33563",
+      "title": "Longest poles",
+      "visualType": "table",
+      "pageId": "page-3",
+      "layout": {
+        "x": 0,
+        "y": 17,
+        "width": 24,
+        "height": 8
+      },
+      "visualOptions": {
+        "colorRulesDisabled": false,
+        "colorRules": [],
+        "colorStyle": "light",
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "dcb0caba-8e6c-554d-b761-71f422c3fca2"
+      },
+      "description": "Slowest individual jobs \u2014 the critical path most worth optimising"
+    },
+    {
+      "id": "e62a7608-6fed-422c-a9c1-9e229ff52a43",
+      "title": "How to read this",
+      "visualType": "markdownCard",
+      "pageId": "page-1",
+      "layout": {
+        "x": 0,
+        "y": 22,
+        "width": 24,
+        "height": 6
+      },
+      "visualOptions": {},
+      "markdownText": "Sourced from the **GitHub Actions Data Stream** (preview). Every tile honours the time range and workflow filters above.\n\n- **Skipped jobs are excluded from timings.** They arrive with all-zero durations and are ~40% of rows, so leaving them in drags every average toward zero.\n- **Negative queue times are dropped, not clamped.** `workflow_job_created` sometimes lands after the job started. Clamping to zero would hide the bias; dropping keeps the p50 honest.\n- **These are not billable minutes.** The stream carries no cost fields. Durations are wall clock, and self-hosted time is free.\n- **Names come from the stream, IDs do not resolve.** Repositories and actors are numeric ids only; join the REST API if you need `owner/repo`."
+    }
+  ],
+  "pages": [
+    {
+      "name": "Overview",
+      "id": "page-1"
+    },
+    {
+      "name": "Queue & runners",
+      "id": "page-2"
+    },
+    {
+      "name": "Where time goes",
+      "id": "page-3"
+    }
+  ],
+  "embeddedApps": []
+}

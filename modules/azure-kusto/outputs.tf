@@ -25,3 +25,20 @@ output "subject" {
   description = "OIDC subject claim this identity trusts."
   value       = module.identity.subject
 }
+
+output "database_name" {
+  description = "Database the stream writes to."
+  value       = azurerm_kusto_database.this.name
+}
+
+output "dashboard_json" {
+  description = <<-DESC
+    A ready-to-import Kusto dashboard, pointed at this cluster and database.
+    Write it to a file and import it in Kusto Web Explorer or Fabric:
+      terraform output -raw dashboard_json > dashboard.json
+  DESC
+  value = templatefile("${path.module}/dashboard/RealTimeDashboard.json", {
+    cluster_uri = azurerm_kusto_cluster.this.uri
+    database    = azurerm_kusto_database.this.name
+  })
+}
