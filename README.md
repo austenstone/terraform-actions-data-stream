@@ -77,11 +77,13 @@ most time:
   `workflow_job_created`**. 100% of skipped jobs, 0% of success/failure. The skew is only 10-50ms,
   but a causal filter like `completed >= created` silently drops every skipped job — about a third
   of all job rows.
-- [#18](https://github.com/austenstone/terraform-actions-data-stream/issues/18) — **runs that end in
-  `action_required` never emit `workflow_run_completed`.** That's the fork-PR approval gate, and it's
-  the common trigger for [#8](https://github.com/austenstone/terraform-actions-data-stream/issues/8).
-  The run is announced but never closes, so anything joining `created` → `completed` accumulates
-  phantom open runs at ~1% of volume. See [Is it complete?](#is-it-complete).
+- [#18](https://github.com/austenstone/terraform-actions-data-stream/issues/18) — **workflow runs on
+  pull requests opened by coding agents are gated at `action_required` and never emit
+  `workflow_run_completed`.** They're held for manual approval, so zero jobs dispatch — the exact
+  path in [#8](https://github.com/austenstone/terraform-actions-data-stream/issues/8). The run is
+  announced but never closes, so anything joining `created` → `completed` accumulates phantom open
+  runs at ~1% of volume, permanently. This one grows with Copilot coding agent adoption. See
+  [Is it complete?](#is-it-complete).
 
 Plans and next steps are in
 [#7](https://github.com/austenstone/terraform-actions-data-stream/issues/7).
@@ -103,22 +105,34 @@ Orphans over a 7-day window, resolved against the REST API:
 
 | conclusion | runs | why |
 |---|---:|---|
-| `action_required` | 33 | fork-PR approval gate — zero jobs dispatched |
+| `action_required` | 33 | PR opened by a coding agent, held for approval — zero jobs dispatched |
 | `failure` | 9 | workflow invalid before dispatch |
 | `startup_failure` | 1 | workflow invalid before dispatch |
 | `null` | 3 | legitimately still running |
 
-43 genuine orphans out of 4,374 runs (**1.05%**), and **77% of them are the approval gate**.
+43 genuine orphans out of 4,374 runs (**1.05%**), and **77% of them are the agent-PR approval
+gate** — 24 authored by `Copilot`, 9 by `Claude`, not one of them a fork PR.
+
+These runs never close. They are already terminal in the REST API the moment they're created
+(`status: completed`, `created_at == updated_at`, zero jobs — 33 of 33), and approving the PR starts
+a *new* run rather than resuming the gated one. There is no later event to wait for.
 
 One root cause: a run that terminates without dispatching any job never closes out. Tracked as
 [#8](https://github.com/austenstone/terraform-actions-data-stream/issues/8), with the approval-gate
 trigger in [#18](https://github.com/austenstone/terraform-actions-data-stream/issues/18).
 
-> A caution worth inheriting: my first pass reported this as *2% of runs missing entirely*. It
-> wasn't. `RunFacts()` inner-joins `created` → `completed`, so half-emitted runs vanished from my
-> own view before I compared anything. **Always reconcile against the raw table, not a derived
-> one** — and set-compare IDs, because five of six repos matched by count and the gap only ever
-> surfaced on a set difference.
+> Two cautions worth inheriting, both earned the hard way here.
+>
+> My first pass reported this as *2% of runs missing entirely*. It wasn't. `RunFacts()`
+> inner-joins `created` → `completed`, so half-emitted runs vanished from my own view before I
+> compared anything. **Always reconcile against the raw table, not a derived one** — and
+> set-compare IDs, because five of six repos matched by count and the gap only ever surfaced on a
+> set difference.
+>
+> My second pass called it the *fork-PR* approval gate. Also wrong — that was an inference from
+> "approval gate" that I never tested. `POST /runs/{id}/approve` rejects all 33 with *"not from a
+> fork pull request."* **The endpoint that would act on your theory is usually the cheapest way to
+> falsify it.**
 
 ### Reconfiguring a live sink is safe
 
