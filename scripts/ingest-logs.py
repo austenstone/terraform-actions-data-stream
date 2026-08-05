@@ -19,6 +19,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 CLUSTER = os.environ["KUSTO_CLUSTER"].rstrip("/")
 DB = os.environ.get("KUSTO_DATABASE", "ActionsDataStream")
+# Must match var.table_name if you changed it from the module default.
+RAW = os.environ.get("KUSTO_TABLE", "ActionsEvents")
 TOKEN = os.environ.get("KUSTO_TOKEN") or subprocess.run(
     ["az", "account", "get-access-token", "--resource", CLUSTER,
      "--query", "accessToken", "-o", "tsv"],
@@ -125,7 +127,7 @@ def process(job):
 def main(limit=25, workers=6, flush=20000):
     todo = query(f"""
     let done = LogArchive | project run_id, attempt;
-    ActionsEvents
+    {RAW}
     | where eventType == 'workflow_run_completed' and eventTimestamp > ago(7d)
     // skipped/cancelled runs return 200 with a 22-byte empty zip -- every one is a
     // wasted call plus a junk zero-line LogArchive row. Was 30/30 of our empties.

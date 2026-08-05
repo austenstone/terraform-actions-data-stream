@@ -547,6 +547,11 @@ and timings. No log parsing, ~1 KB per job.
 KUSTO_CLUSTER=https://<cluster>.<region>.kusto.windows.net python3 scripts/ingest-steps.py
 ```
 
+Both ingesters read `KUSTO_CLUSTER` (required), and optionally `KUSTO_DATABASE` and `KUSTO_TABLE`
+— set the last two if you changed `database_name` or `table_name` from the module defaults. Auth
+falls back to `az account get-access-token`, so an `az login` is enough; set `KUSTO_TOKEN` to
+override.
+
 Populates `WorkflowSteps`, which backs `StepFacts()`, `StepStats()`, `JobTimeSplit()`,
 `StepFailures()`, `StepFailureHotspots()`, `OtelStepSpans()` and `OtelTraceTree()` from
 [`kql/enrichment.kql`](modules/azure-kusto/kql/enrichment.kql).

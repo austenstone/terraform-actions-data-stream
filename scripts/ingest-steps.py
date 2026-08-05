@@ -10,6 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 CLUSTER = os.environ["KUSTO_CLUSTER"].rstrip("/")
 DB, CHUNK = os.environ.get("KUSTO_DATABASE", "ActionsDataStream"), 5000
+# Must match var.table_name if you changed it from the module default.
+RAW = os.environ.get("KUSTO_TABLE", "ActionsEvents")
 TOKEN = os.environ.get("KUSTO_TOKEN") or subprocess.run(
     ["az", "account", "get-access-token", "--resource", CLUSTER,
      "--query", "accessToken", "-o", "tsv"],
@@ -94,7 +96,7 @@ def fetch(job):
 def main(limit=400, workers=4):
     done = {r["check_run_id"] for r in query("WorkflowSteps | distinct check_run_id")}
     jobs = [j for j in query(f"""
-        ActionsEvents
+        {RAW}
         | where eventType == 'workflow_job_completed'
         // skipped/cancelled jobs never populate steps[] -- 45% of events, all wasted calls
         | where tostring(eventData.job_conclusion) !in ('skipped', 'cancelled')
