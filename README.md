@@ -17,6 +17,13 @@ setup is what these modules do.
 > zero workflow events — because only the first switch is on. If that's what you're seeing, your
 > cloud config is fine; ask GitHub to enable event publishing for your org or enterprise.
 
+> [!TIP]
+> Everything below was measured against a live stream rather than read off a docs page. Findings
+> are written up for GitHub field teams in
+> [github/actions-sales#953](https://github.com/github/actions-sales/discussions/953) and reported
+> to the service team in
+> [github/actions-data-stream#211](https://github.com/github/actions-data-stream/issues/211).
+
 ## What gets created
 
 | Module | Creates |
@@ -65,6 +72,11 @@ most time:
   create/update/delete is not written to the audit log at all**, and sinks carry no
   `created_at`/`updated_at`/`created_by`. An org-wide egress path can be added, repointed, or
   removed with no attributable record anywhere. Worth knowing before a security review asks.
+- [#17](https://github.com/austenstone/terraform-actions-data-stream/issues/17) — **every skipped
+  job emits its `workflow_job_completed` with an earlier `eventTimestamp` than its own
+  `workflow_job_created`**. 100% of skipped jobs, 0% of success/failure. The skew is only 10-50ms,
+  but a causal filter like `completed >= created` silently drops every skipped job — about a third
+  of all job rows.
 
 Plans and next steps are in
 [#7](https://github.com/austenstone/terraform-actions-data-stream/issues/7).
@@ -84,6 +96,26 @@ Two caveats:
   brand-new Kusto table returns `422 BadRequest_EntityNotFound` for **~5 minutes** while the
   streaming schema cache warms. Create the table, wait, then repoint.
 - A brand-new *sink* has a ~4 minute delivery warmup. Reconfiguring an existing one does not.
+
+### You probably don't need a reorder buffer
+
+The contract is at-least-once with **no ordering guarantee**, which reads as "assume total
+disorder." Measured against the live stream, delivery is far better than that:
+
+| pair | n | arrived out of causal order |
+|---|---:|---:|
+| `run_created` → `run_completed` | 617 | 2 (**0.32%**) |
+| `job_created` → `job_completed` | 1,030 | 10 (**0.97%**) |
+
+Measured with `ingestion_time()` at the destination, so it covers the full delivery path. About
+**99% of pairs already arrive in causal order** and the exceptions are sub-second. Design for
+out-of-order arrival — the contract allows it and you will see it — but a seconds-wide watermark
+is enough. You do not need to buffer minutes.
+
+The disorder you will actually hit comes from the *other* direction. 36% of jobs are emitted with
+an inverted `eventTimestamp` ([#17](https://github.com/austenstone/terraform-actions-data-stream/issues/17)),
+which is 37x more inversion than delivery introduces. Join on `job_id`/`workflow_run_id` and treat
+`eventTimestamp` as approximate rather than as a causal ordering key.
 
 ## The part everyone gets wrong
 
