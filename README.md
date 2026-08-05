@@ -61,9 +61,29 @@ most time:
 - [#15](https://github.com/austenstone/terraform-actions-data-stream/issues/15) — **Test connection
   writes a real row into your destination**, as an undocumented sixth event type
   `test_connection`. Filter `eventType != "test_connection"` in any raw-table query.
+- [#16](https://github.com/austenstone/terraform-actions-data-stream/issues/16) — **sink
+  create/update/delete is not written to the audit log at all**, and sinks carry no
+  `created_at`/`updated_at`/`created_by`. An org-wide egress path can be added, repointed, or
+  removed with no attributable record anywhere. Worth knowing before a security review asks.
 
 Plans and next steps are in
 [#7](https://github.com/austenstone/terraform-actions-data-stream/issues/7).
+
+### Reconfiguring a live sink is safe
+
+`PATCH`ing a sink — including **changing its destination** — is lossless and exactly-once. Measured
+on a live stream: across a cutover from one Kusto table to another, a control sink saw 24 events and
+the reconfigured sink's old and new tables saw 24 between them, with **zero dropped and zero
+double-delivered**. The cutover minute splits cleanly across the two tables. An idempotent `PATCH`
+(byte-identical config) is likewise a no-op on delivery.
+
+Two caveats:
+
+- A `PATCH` is validated by *actually delivering* to the new destination, so a bad config returns
+  `422` with the destination's own error rather than persisting. That's good, but it means a
+  brand-new Kusto table returns `422 BadRequest_EntityNotFound` for **~5 minutes** while the
+  streaming schema cache warms. Create the table, wait, then repoint.
+- A brand-new *sink* has a ~4 minute delivery warmup. Reconfiguring an existing one does not.
 
 ## The part everyone gets wrong
 
