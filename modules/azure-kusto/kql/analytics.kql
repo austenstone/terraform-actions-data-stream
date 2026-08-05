@@ -39,14 +39,25 @@
       by job_id
 }
 
-.create ifnotexists materialized-view with (backfill=true, docString="One row per run") Runs on table ${table_name} {
+// Keyed by run_id AND attempt. A re-run reuses run_id, so keying on run_id
+// alone collides every attempt into one row: the newest completion wins and
+// inherits the FIRST attempt's created_at. Measured on a real re-run, an
+// 8-second attempt was reported as 24,809 seconds because it kept the original
+// attempt's start time from ~7 hours earlier.
+//
+// Note that re-runs emit NO workflow_run_created event at all -- only
+// workflow_job_created/completed and workflow_run_completed. So created_at is
+// null for every attempt > 1 and RunFacts() recovers it from the job events.
+// See https://github.com/austenstone/terraform-actions-data-stream/issues/23
+.create ifnotexists materialized-view with (backfill=true, docString="One row per run attempt") Runs on table ${table_name} {
     ${table_name}
     | where eventType in ("workflow_run_created", "workflow_run_completed")
-    | extend run_id = tolong(eventData.workflow_run_id)
+    | extend run_id = tolong(eventData.workflow_run_id),
+             attempt = toint(eventData.workflow_run_attempt)
     | summarize
         created_at   = minif(eventTimestamp, eventType == "workflow_run_created"),
         completed_ev = arg_max(iff(eventType == "workflow_run_completed", eventTimestamp, datetime(null)), eventData)
-      by run_id
+      by run_id, attempt
 }
 
 // ------------------------------------------------------------------ gold
@@ -94,20 +105,31 @@
 // mostly fork-PR approval gates (action_required) plus workflows invalid before job dispatch.
 // Never use this as the left side of a completeness audit: reconcile against the raw table
 // instead, or you will attribute this join to the stream. See issues #8 and #18.
-.create-or-alter function with (docString="One row per completed run, typed and derived. Excludes runs with no completion event (~1%, see #8)", folder="gold") RunFacts() {
+.create-or-alter function with (docString="One row per completed run attempt, typed and derived. Excludes runs with no completion event (~1%, see #8)", folder="gold") RunFacts() {
+    // Re-runs emit no workflow_run_created, so created_at is null for every
+    // attempt > 1. The job events DO carry the right attempt, so the earliest
+    // job creation is an accurate stand-in for when the attempt started -- it
+    // is how the run began from the runner's point of view. Without this a
+    // re-run has a null wall_seconds. See #23.
+    let attempt_starts = ${table_name}
+      | where eventType == "workflow_job_created"
+      | extend d = todynamic(tostring(eventData))
+      | summarize first_job_at = min(eventTimestamp)
+        by run_id = tolong(d.workflow_run_id), attempt = toint(d.workflow_run_attempt);
     Runs
     | where isnotnull(completed_ev)
+    | join kind=leftouter attempt_starts on run_id, attempt
     | extend
+        started_at    = coalesce(created_at, first_job_at),
         repository_id = tolong(eventData.repository_id),
         workflow_name = tostring(eventData.workflow.name),
         workflow_path = tostring(eventData.workflow_file_path),
         trigger       = tostring(eventData.workflow_run_event),
         branch        = tostring(eventData.workflow_run_head_branch),
         conclusion    = tostring(eventData.workflow_run_conclusion),
-        attempt       = toint(eventData.workflow_run_attempt),
         actor_id      = tolong(eventData.workflow_run_actor_id)
-    | extend wall_seconds = datetime_diff("second", completed_ev, created_at)
-    | project run_id, repository_id, actor_id, attempt, created_at, completed_at = completed_ev,
+    | extend wall_seconds = datetime_diff("second", completed_ev, started_at)
+    | project run_id, repository_id, actor_id, attempt, created_at = started_at, completed_at = completed_ev,
               wall_seconds, conclusion, workflow_name, workflow_path, trigger, branch
 }
 
