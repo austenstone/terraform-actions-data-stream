@@ -517,10 +517,15 @@ RunFacts()
 | order by p95_overhead desc
 ```
 
-Three things to know before you build on it:
+Four things to know before you build on it:
 
 - **Filter `runner_kind == "unknown"`.** Skipped jobs emit both events with zero durations. On a real
   org they were 40% of rows and destroyed every average.
+- **Key runs on `(run_id, attempt)`, never `run_id` alone.** A re-run reuses the run id and emits no
+  `workflow_run_created` at all ([#23](https://github.com/austenstone/terraform-actions-data-stream/issues/23)),
+  so pairing created→completed on the id splices a re-run's completion onto the original attempt's start.
+  Measured: an 8-second re-run reported as 24,809 seconds. `RunFacts()` recovers the real start from the
+  earliest `workflow_job_created` for the same attempt.
 - **Dedupe on `eventUuid` if correctness matters.** Delivery is at-least-once. Across 20k observed
   events there were zero duplicates, but the contract permits them.
 - **~5% of queue times compute negative** — `workflow_job_created` is occasionally emitted after the
@@ -603,6 +608,16 @@ the text.
 
 See **[docs/workflow-logs.md](docs/workflow-logs.md)** for the measured numbers, the ID-based route
 table, the reference architecture, and the reconciliation sweep you need to make it durable.
+
+## Does this replace a CI observability product?
+
+Mostly. Executions, failure rates, duration percentiles, per-step breakdowns, queue time, logs, and
+distributed traces all have direct equivalents here. Two gaps: flame graphs have the data but no
+native renderer (export the spans over OTLP), and **test-level results are absent entirely** — the
+step is the finest granularity, so true flaky-test detection is not possible from this feed.
+
+See **[docs/ci-observability-parity.md](docs/ci-observability-parity.md)** for the panel-by-panel
+comparison, measured against a live org.
 
 ## Dashboard
 
