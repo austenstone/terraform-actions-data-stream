@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 (2026-08-05)
+
+Additive and non-breaking. No materialized view changed, so upgrading from `v0.1.0` does
+not reprocess history. `enrichment_subjects` defaults to empty, so an existing deployment
+that does not set it plans no new resources.
 
 ### Added
 

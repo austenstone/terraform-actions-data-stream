@@ -228,7 +228,7 @@ Terraform instead, point `source` at the repo — no clone, and you can pin a ve
 
 ```hcl
 module "sink" {
-  source = "git::https://github.com/austenstone/terraform-actions-data-stream.git//modules/azure-kusto?ref=v0.1.0"
+  source = "git::https://github.com/austenstone/terraform-actions-data-stream.git//modules/azure-kusto?ref=v0.2.0"
 
   resource_group_name = azurerm_resource_group.this.name
   location            = azurerm_resource_group.this.location
@@ -648,7 +648,7 @@ trust and the module creates a **second** managed identity for them:
 
 ```hcl
 module "kusto_sink" {
-  source = "git::https://github.com/austenstone/terraform-actions-data-stream.git//modules/azure-kusto?ref=v0.1.0"
+  source = "git::https://github.com/austenstone/terraform-actions-data-stream.git//modules/azure-kusto?ref=v0.2.0"
   # ...
   enrichment_subjects = ["repo:my-org/observability:ref:refs/heads/main"]
 }
