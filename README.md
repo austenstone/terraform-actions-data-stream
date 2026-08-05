@@ -501,7 +501,7 @@ terraform output -raw dashboard_json > dashboard.json
 ```
 
 Import it in [Kusto Web Explorer](https://dataexplorer.azure.com) (**Dashboards → New dashboard →
-Import from file**), or into Fabric with `fab import`. Three pages, fifteen tiles, built entirely on
+Import from file**), or into Fabric with `fab import`. Four pages, twenty tiles, built entirely on
 the gold functions:
 
 | Page | Answers |
@@ -509,6 +509,7 @@ the gold functions:
 | **Overview** | Is CI healthy right now? Throughput, outcomes, busiest workflows, what triggers them. |
 | **Queue & runners** | Are we runner-constrained? Queue time by label, concurrency, slowest jobs to get a runner, runner-group utilization. |
 | **Where time goes** | What is CI wasting? Failure hotspots, orchestration overhead, minutes lost queueing, longest jobs. |
+| **Stream health** | Is the feed itself trustworthy? Ingestion lag percentiles, event mix, duplicate detection, delivery gaps. |
 
 Both filters — the time range and a workflow multi-select — are wired to every tile.
 
@@ -516,6 +517,11 @@ The source of truth is
 [`modules/azure-kusto/dashboard/RealTimeDashboard.json`](modules/azure-kusto/dashboard/RealTimeDashboard.json)
 with `${cluster_uri}` / `${database}` placeholders; Terraform renders it. Every tile query has been
 executed against a live cluster, so an empty tile means no matching data, not a broken query.
+
+> If you edit that JSON, **validate it against the published schema before importing**. Nothing in
+> the write path checks it — the API, `fab`, and Terraform will all happily ship a document the
+> browser client then refuses to load, and the client's only feedback is a single misleading
+> sentence. Ask me how I know.
 
 One thing the dashboard cannot show you: **cost**. The stream carries no billable minutes and no
 runner SKU. Every duration is wall clock. `job_labels` and `runner_group_name` are the only runner
