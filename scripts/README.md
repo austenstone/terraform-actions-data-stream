@@ -34,12 +34,14 @@ to *deploy* it, only to *modify* it.
 | `add-stream-health-page.py` | Regenerates the Stream health page |
 | `add-explorer-page.py` | Regenerates the Explorer page |
 | `add-live-page.py` | Regenerates the Live page |
+| `add-dashboard-links.py` | Adds GitHub deep links to tables with exact repo, workflow, run, or job targets |
 | `fix-multistat-height.py` | Repairs multistat tiles authored below the client's minimum height |
 | `test-explorer-queries.py` | Runs the Explorer page's queries against a live cluster |
 
 **Order matters.** Each page builder appends its tiles and shifts what follows,
 so run them in the order listed and `add-live-page.py` last. Then
-`fix-multistat-height.py`, then `validate_dashboard.py`, then publish.
+`add-dashboard-links.py`, `fix-multistat-height.py`, `validate_dashboard.py`,
+and publish.
 
 Validation is not optional here, and not because the write might fail. The
 write succeeds either way. The Fabric API, `fab`, and Terraform all accept a

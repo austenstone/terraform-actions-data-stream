@@ -716,6 +716,8 @@ The source of truth is
 [`modules/azure-kusto/dashboard/RealTimeDashboard.json`](modules/azure-kusto/dashboard/RealTimeDashboard.json)
 with `${cluster_uri}` / `${database}` placeholders; Terraform renders it. Every tile query has been
 executed against a live cluster, so an empty tile means no matching data, not a broken query.
+Tables with an exact GitHub target deep-link readable repo, workflow, branch, run, and job values;
+aggregate labels without one honest target deliberately remain plain text.
 
 > If you edit that JSON, **validate it against the published schema before importing**. Nothing in
 > the write path checks it — the API, `fab`, and Terraform will all happily ship a document the
