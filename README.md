@@ -77,9 +77,36 @@ most time:
   `workflow_job_created`**. 100% of skipped jobs, 0% of success/failure. The skew is only 10-50ms,
   but a causal filter like `completed >= created` silently drops every skipped job — about a third
   of all job rows.
+- [#18](https://github.com/austenstone/terraform-actions-data-stream/issues/18) — **runs that end in
+  `action_required` are never emitted.** That's the fork-PR approval gate. Everything else arrives
+  intact, so if you reconcile against the REST API you'll see a small unexplained deficit that is
+  entirely this. See [Is it complete?](#is-it-complete).
 
 Plans and next steps are in
 [#7](https://github.com/austenstone/terraform-actions-data-stream/issues/7).
+
+### Is it complete?
+
+Yes, with one exclusion. This is the question every enterprise asks first, and until now the only
+answer was the stream agreeing with itself, which proves nothing.
+
+Reconciled against the REST API over a fixed 24h window across the six busiest repos: the API
+reported **568** runs, the sink received **556**, and **nothing arrived that the API didn't have**.
+The 12-run gap is entirely `action_required` — 100% of that conclusion, 0% of every other:
+
+| conclusion | in API | delivered |
+|---|---:|---:|
+| `skipped` | 235 | 235 |
+| `success` | 230 | 230 |
+| `failure` | 91 | 91 |
+| `action_required` | 12 | **0** |
+
+So the stream is not lossy. It carries every run it's supposed to carry and invents none. But if you
+reconcile without knowing about the `action_required` exclusion you'll measure a ~2% deficit and
+reasonably conclude otherwise. Filter it on the API side and the two sets match exactly.
+
+Tracked as [#18](https://github.com/austenstone/terraform-actions-data-stream/issues/18) — those are
+fork-PR approval-gate runs, which is exactly the category a security team would want.
 
 ### Reconfiguring a live sink is safe
 
