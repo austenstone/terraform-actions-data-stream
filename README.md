@@ -132,6 +132,12 @@ One root cause: a run that terminates without dispatching any job never closes o
 [#8](https://github.com/austenstone/terraform-actions-data-stream/issues/8), with the approval-gate
 trigger in [#18](https://github.com/austenstone/terraform-actions-data-stream/issues/18).
 
+The gate is a repo setting, so this rate is tunable rather than fixed: **Settings → Copilot → Cloud
+agent → "Actions workflow approval" → `Require approval for workflow runs`**, on by default
+([docs](https://docs.github.com/en/enterprise-cloud@latest/copilot/how-tos/use-copilot-agents/cloud-agent/configuring-agent-settings#allowing-github-actions-workflows-to-run-automatically-when-copilot-pushes)).
+Turning it off removes most of the orphans and accepts unreviewed agent-authored code reaching your
+secrets — a real tradeoff, not a free win. Expect this 1% to *grow* as agent-opened PRs grow.
+
 > Two cautions worth inheriting, both earned the hard way here.
 >
 > My first pass reported this as *2% of runs missing entirely*. It wasn't. `RunFacts()`
