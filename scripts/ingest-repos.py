@@ -83,10 +83,14 @@ def fetch(repo_id):
 
 def main(workers=8):
     known = {r["repository_id"] for r in query("Repos | distinct repository_id")}
+    # eventData is dynamic for most rows but arrives as a JSON string for some,
+    # and dotted access silently yields null on those. Round-tripping through
+    # todynamic(tostring(...)) handles both and is what the KQL functions do.
     ids = [r["repository_id"] for r in query(f"""
         {RAW}
-        | where isnotempty(tostring(eventData.repository_id))
-        | distinct repository_id = tolong(eventData.repository_id)""")
+        | extend repository_id = tolong(todynamic(tostring(eventData)).repository_id)
+        | where isnotnull(repository_id) and repository_id > 0
+        | distinct repository_id""")
         if r["repository_id"] not in known]
 
     print(f"{len(ids)} repos to resolve ({len(known)} already known)")
