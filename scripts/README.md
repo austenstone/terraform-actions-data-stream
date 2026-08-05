@@ -46,3 +46,9 @@ write succeeds either way. The Fabric API, `fab`, and Terraform all accept a
 document the browser client will then refuse to load, and the client reports
 that refusal as a version mismatch between two identical version numbers. The
 schema check is the only thing in the chain that will tell you the truth.
+
+`validate_dashboard.py` is vendored, not authored here. It is a copy of the
+one in the `fabric-dashboards` agent skill, kept in-repo so this repository
+stands alone with no private dependency. Two copies drift silently, so treat
+the skill's copy as canonical and re-copy rather than editing this one in
+place.

@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## v0.2.0 (2026-08-05)
 
 Additive and non-breaking. No materialized view changed, so upgrading from `v0.1.0` does
