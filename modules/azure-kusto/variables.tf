@@ -117,3 +117,29 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "enrichment_subjects" {
+  type        = list(string)
+  default     = []
+  description = <<-DESC
+    OIDC subject claims allowed to run the enrichment scripts in scripts/, which
+    backfill the names, step rows and log bodies the stream itself does not
+    carry. Leave empty and no enrichment identity is created.
+
+    These are ordinary GitHub Actions OIDC subjects, so they are scoped to a repo
+    and a ref, environment or tag:
+
+      repo:my-org/ci-observability:ref:refs/heads/main
+      repo:my-org/ci-observability:environment:production
+      repo:my-org/ci-observability:ref:refs/tags/v1.0.0
+
+    A second identity is created rather than reusing the stream's, because these
+    scripts must *read* the raw events and the stream itself never should. See
+    examples/enrichment-workflow.yml for the workflow side.
+  DESC
+
+  validation {
+    condition     = alltrue([for s in var.enrichment_subjects : can(regex("^repo:[^/]+/[^:]+:(ref:.+|environment:.+|pull_request)$", s))])
+    error_message = "Each subject must look like repo:OWNER/REPO:ref:refs/heads/BRANCH (or :environment:NAME, or :pull_request). A bare owner/repo is not a subject claim."
+  }
+}

@@ -42,3 +42,15 @@ output "dashboard_json" {
     database    = azurerm_kusto_database.this.name
   })
 }
+
+output "enrichment_identity" {
+  description = <<-DESC
+    Credentials for the enrichment workflow, or null if enrichment_subjects was
+    left empty. Feed these to azure/login in the workflow that runs scripts/.
+  DESC
+  value = length(var.enrichment_subjects) > 0 ? {
+    client_id       = azurerm_user_assigned_identity.enrichment[0].client_id
+    tenant_id       = azurerm_user_assigned_identity.enrichment[0].tenant_id
+    subscription_id = data.azurerm_client_config.current.subscription_id
+  } : null
+}

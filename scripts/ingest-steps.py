@@ -16,7 +16,17 @@ TOKEN = os.environ.get("KUSTO_TOKEN") or subprocess.run(
     ["az", "account", "get-access-token", "--resource", CLUSTER,
      "--query", "accessToken", "-o", "tsv"],
     capture_output=True, text=True, check=True).stdout.strip()
-ENV = {k: v for k, v in os.environ.items() if k != "GH_TOKEN"}
+# gh resolves credentials from GH_TOKEN/GITHUB_TOKEN before its keyring, so in
+# CI the environment variable is the only credential there is and must be kept.
+# Locally that variable is sometimes a low-scope token shadowing a better one in
+# the keyring; set GH_IGNORE_ENV_TOKEN=1 to drop it and fall back to the keyring.
+def _gh_env():
+    env = dict(os.environ)
+    if os.environ.get("GH_IGNORE_ENV_TOKEN") == "1":
+        env.pop("GH_TOKEN", None)
+    return env
+
+ENV = _gh_env()
 MISS = []
 
 

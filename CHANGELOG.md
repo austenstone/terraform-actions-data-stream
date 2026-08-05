@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `enrichment_subjects` on the Kusto module. Given a list of GitHub OIDC subjects, it creates a
+  second managed identity holding **Viewer + Ingestor** on the database so a scheduled workflow can
+  run the enrichment scripts with no stored Azure secret. Empty by default, so existing deployments
+  plan unchanged. Output: `enrichment_identity` (`client_id`, `tenant_id`, `subscription_id`).
+- `examples/enrichment-workflow.yml` — a working hourly workflow for the above.
+
+### Fixed
+
+- The enrichment scripts dropped `GH_TOKEN` from the environment they passed to `gh`, which is
+  correct on a laptop with a keyring but leaves **no credential at all in CI**, where the
+  environment variable is the only one there is. The variable is now kept by default; set
+  `GH_IGNORE_ENV_TOKEN=1` for the laptop case. This made the scheduled workflow above impossible to
+  actually run before now.
+
 ## v0.1.0
 
 First tagged release. Everything before this was `main`.

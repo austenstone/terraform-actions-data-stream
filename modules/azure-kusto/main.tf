@@ -161,3 +161,67 @@ resource "azurerm_kusto_script" "enrichment" {
 
   depends_on = [azurerm_kusto_script.analytics]
 }
+
+# ------------------------------------------------------------------ enrichment
+#
+# The scripts in scripts/ fill the gaps the stream leaves: repository and owner
+# names, per-step rows, and log bodies. They need to read the raw events and
+# write the four enrichment tables, so they get their own identity with Viewer
+# and Ingestor. The stream's identity stays write-only -- a process that only
+# ever appends should not be able to read the whole history back out.
+#
+# Created only when var.enrichment_subjects is non-empty.
+locals {
+  enable_enrichment = length(var.enrichment_subjects) > 0
+}
+
+resource "azurerm_user_assigned_identity" "enrichment" {
+  count = local.enable_enrichment ? 1 : 0
+
+  name                = "${var.identity_name}-enrichment"
+  resource_group_name = var.resource_group_name
+  location            = var.location
+  tags                = var.tags
+}
+
+# Federated credential names must be unique per identity and are not
+# meaningful to the token exchange, so they are indexed rather than derived
+# from the subject -- subjects contain slashes and colons, which are not legal
+# in a resource name.
+resource "azurerm_federated_identity_credential" "enrichment" {
+  count = length(var.enrichment_subjects)
+
+  name                      = "enrichment-${count.index}"
+  user_assigned_identity_id = azurerm_user_assigned_identity.enrichment[0].id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = "https://token.actions.githubusercontent.com"
+  subject                   = var.enrichment_subjects[count.index]
+}
+
+# Two assignments, not Admin. The scripts query the raw table and ingest into
+# tables Terraform already created, so they never need to create or drop one.
+resource "azurerm_kusto_database_principal_assignment" "enrichment_viewer" {
+  count = local.enable_enrichment ? 1 : 0
+
+  name                = "enrichment-viewer"
+  resource_group_name = var.resource_group_name
+  cluster_name        = azurerm_kusto_cluster.this.name
+  database_name       = azurerm_kusto_database.this.name
+  tenant_id           = azurerm_user_assigned_identity.enrichment[0].tenant_id
+  principal_id        = azurerm_user_assigned_identity.enrichment[0].principal_id
+  principal_type      = "App"
+  role                = "Viewer"
+}
+
+resource "azurerm_kusto_database_principal_assignment" "enrichment_ingestor" {
+  count = local.enable_enrichment ? 1 : 0
+
+  name                = "enrichment-ingestor"
+  resource_group_name = var.resource_group_name
+  cluster_name        = azurerm_kusto_cluster.this.name
+  database_name       = azurerm_kusto_database.this.name
+  tenant_id           = azurerm_user_assigned_identity.enrichment[0].tenant_id
+  principal_id        = azurerm_user_assigned_identity.enrichment[0].principal_id
+  principal_type      = "App"
+  role                = "Ingestor"
+}

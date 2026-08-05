@@ -577,8 +577,9 @@ KUSTO_CLUSTER=https://<cluster>.<region>.kusto.windows.net python3 scripts/inges
 ```
 
 Populates `Repos`, which backs `RepoNames()` and every `Hierarchy*()` function. Incremental — it
-only resolves ids it hasn't seen, so re-running is cheap (17 repos in ~2s) and it's worth putting on
-a schedule, since repos are created continuously.
+only resolves ids it hasn't seen, so re-running is cheap (17 repos in ~2s) and it belongs on a
+schedule, since repos are created continuously. See
+[Running enrichment on a schedule](#running-enrichment-on-a-schedule).
 
 Rows are **appended, never replaced**, and readers take the newest row per id. Repos get renamed and
 transferred between orgs; keeping the history means a six-month-old run still resolves to the name it
@@ -634,6 +635,42 @@ the text.
 
 See **[docs/workflow-logs.md](docs/workflow-logs.md)** for the measured numbers, the ID-based route
 table, the reference architecture, and the reconciliation sweep you need to make it durable.
+
+### Running enrichment on a schedule
+
+All three scripts are incremental, so the natural home for them is a scheduled workflow rather than
+your laptop. [`examples/enrichment-workflow.yml`](examples/enrichment-workflow.yml) is a working one:
+hourly, no stored Azure secret, `ubuntu-slim` (which already carries the Azure CLI, the GitHub CLI
+and Python, so nothing needs installing).
+
+The identity it authenticates as is opt-in. Set `enrichment_subjects` to the workflows you want to
+trust and the module creates a **second** managed identity for them:
+
+```hcl
+module "kusto_sink" {
+  source = "git::https://github.com/austenstone/terraform-actions-data-stream.git//modules/azure-kusto?ref=v0.1.0"
+  # ...
+  enrichment_subjects = ["repo:my-org/observability:ref:refs/heads/main"]
+}
+```
+
+```bash
+terraform output enrichment_identity   # -> client_id, tenant_id for azure/login
+```
+
+It is deliberately a separate identity from the one the stream uses, and it holds **Viewer +
+Ingestor**, not Admin. Enrichment has to *read* raw events to know which ids need resolving; the
+stream never should. Splitting them means a compromised sink credential still cannot read your
+history back out, and neither credential can drop a table — Terraform owns the schema, so nothing at
+runtime needs the rights to change it.
+
+Two things to get right in the workflow itself:
+
+- **`GITHUB_TOKEN` is not enough.** It only sees the repo the workflow runs in, and enrichment
+  resolves ids from every repo in the org. Use an org-scoped GitHub App installation token, or a
+  fine-grained PAT limited to read-only Metadata and Actions.
+- **Leave `ingest-logs.py` opt-in.** It is the only expensive one, and it — not the stream — is what
+  will grow your database. The example puts it behind a `workflow_dispatch` input.
 
 ## Does this replace a CI observability product?
 

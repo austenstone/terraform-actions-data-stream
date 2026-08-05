@@ -1,0 +1,93 @@
+# Enrichment on a schedule.
+#
+# The Data Stream gives you ids, not names, and stops at the job boundary. The
+# scripts in scripts/ close both gaps by calling the REST API and appending to
+# the enrichment tables Terraform created:
+#
+#   ingest-repos.py   repository_id      -> owner/name        (Repos)
+#   ingest-steps.py   check_run_id       -> per-step rows     (WorkflowSteps)
+#   ingest-logs.py    run id             -> log bodies        (WorkflowLogs, LogArchive)
+#
+# Copy this file into .github/workflows/ in a repo of your choosing, set the
+# three variables below, and add that repo to enrichment_subjects so the
+# identity Terraform created will trust it:
+#
+#   enrichment_subjects = ["repo:YOUR-ORG/YOUR-REPO:ref:refs/heads/main"]
+#
+# terraform output enrichment_identity gives you client_id and tenant_id.
+
+name: Actions Data Stream enrichment
+
+on:
+  schedule:
+    # Hourly. Steps and repo names are cheap; see the logs job for the one
+    # that is not.
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      include_logs:
+        description: 'Also pull log bodies (slow, and grows the database fast)'
+        type: boolean
+        default: false
+
+# OIDC needs id-token: write. Nothing here writes to the repo.
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  # These scripts are incremental, not idempotent under concurrency -- two
+  # overlapping runs would both see the same unresolved ids and ingest each
+  # twice. Never cancel in progress; just wait.
+  group: actions-data-stream-enrichment
+  cancel-in-progress: false
+
+env:
+  KUSTO_CLUSTER: ${{ vars.KUSTO_CLUSTER }}
+  KUSTO_DATABASE: ActionsDataStream
+  # gh reads this. The default GITHUB_TOKEN only sees the repo this workflow
+  # runs in, which is not what you want -- enrichment has to resolve ids from
+  # every repo in the org. Use a token that can see them all: an org-scoped
+  # GitHub App installation token (preferred) or a fine-grained PAT with
+  # read-only Metadata + Actions across the org.
+  GH_TOKEN: ${{ secrets.ENRICHMENT_GH_TOKEN }}
+
+jobs:
+  enrich:
+    # ubuntu-slim carries Azure CLI, GitHub CLI, Python 3.12, curl and unzip,
+    # so nothing needs installing.
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Authenticate to Azure
+        uses: azure/login@f5d393ae46f8fde4be8b75f32e3fc50e654ad0ca # v3.0.1
+        with:
+          client-id: ${{ vars.KUSTO_ENRICHMENT_CLIENT_ID }}
+          tenant-id: ${{ vars.KUSTO_ENRICHMENT_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Mint a Kusto token
+        run: |
+          token="$(az account get-access-token --resource "$KUSTO_CLUSTER" --query accessToken -o tsv)"
+          echo "::add-mask::$token"
+          {
+            echo "KUSTO_TOKEN<<KUSTO_TOKEN_EOF"
+            echo "$token"
+            echo "KUSTO_TOKEN_EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Repository and owner names
+        run: python3 scripts/ingest-repos.py
+
+      - name: Step-level rows
+        run: python3 scripts/ingest-steps.py
+
+      # Logs are opt-in. This is the expensive one: it downloads and unzips
+      # every run's archive, and it is what will grow your database, not the
+      # stream. Turn it on deliberately.
+      - name: Log bodies
+        if: inputs.include_logs
+        run: python3 scripts/ingest-logs.py
