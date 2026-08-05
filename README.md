@@ -78,35 +78,47 @@ most time:
   but a causal filter like `completed >= created` silently drops every skipped job — about a third
   of all job rows.
 - [#18](https://github.com/austenstone/terraform-actions-data-stream/issues/18) — **runs that end in
-  `action_required` are never emitted.** That's the fork-PR approval gate. Everything else arrives
-  intact, so if you reconcile against the REST API you'll see a small unexplained deficit that is
-  entirely this. See [Is it complete?](#is-it-complete).
+  `action_required` never emit `workflow_run_completed`.** That's the fork-PR approval gate, and it's
+  the common trigger for [#8](https://github.com/austenstone/terraform-actions-data-stream/issues/8).
+  The run is announced but never closes, so anything joining `created` → `completed` accumulates
+  phantom open runs at ~1% of volume. See [Is it complete?](#is-it-complete).
 
 Plans and next steps are in
 [#7](https://github.com/austenstone/terraform-actions-data-stream/issues/7).
 
 ### Is it complete?
 
-Yes, with one exclusion. This is the question every enterprise asks first, and until now the only
-answer was the stream agreeing with itself, which proves nothing.
+Yes. Not one run is dropped. This is the question every enterprise asks first, and until now the
+only answer was the stream agreeing with itself, which proves nothing.
 
-Reconciled against the REST API over a fixed 24h window across the six busiest repos: the API
-reported **568** runs, the sink received **556**, and **nothing arrived that the API didn't have**.
-The 12-run gap is entirely `action_required` — 100% of that conclusion, 0% of every other:
+Reconciled against the REST API by **set-comparing run IDs** — not counts — over 30 days and 4,333
+run-completion events: **zero** runs reached the sink that the API didn't have, and every run the
+API reported was announced on the stream. Nothing is lost and nothing is invented.
 
-| conclusion | in API | delivered |
-|---|---:|---:|
-| `skipped` | 235 | 235 |
-| `success` | 230 | 230 |
-| `failure` | 91 | 91 |
-| `action_required` | 12 | **0** |
+The real defect is narrower and lives in the *second half* of the pair. Roughly **1% of runs emit
+`workflow_run_created` and then never emit `workflow_run_completed`**, so they stay permanently open
+for any consumer that joins the two.
 
-So the stream is not lossy. It carries every run it's supposed to carry and invents none. But if you
-reconcile without knowing about the `action_required` exclusion you'll measure a ~2% deficit and
-reasonably conclude otherwise. Filter it on the API side and the two sets match exactly.
+Orphans over a 7-day window, resolved against the REST API:
 
-Tracked as [#18](https://github.com/austenstone/terraform-actions-data-stream/issues/18) — those are
-fork-PR approval-gate runs, which is exactly the category a security team would want.
+| conclusion | runs | why |
+|---|---:|---|
+| `action_required` | 33 | fork-PR approval gate — zero jobs dispatched |
+| `failure` | 9 | workflow invalid before dispatch |
+| `startup_failure` | 1 | workflow invalid before dispatch |
+| `null` | 3 | legitimately still running |
+
+43 genuine orphans out of 4,374 runs (**1.05%**), and **77% of them are the approval gate**.
+
+One root cause: a run that terminates without dispatching any job never closes out. Tracked as
+[#8](https://github.com/austenstone/terraform-actions-data-stream/issues/8), with the approval-gate
+trigger in [#18](https://github.com/austenstone/terraform-actions-data-stream/issues/18).
+
+> A caution worth inheriting: my first pass reported this as *2% of runs missing entirely*. It
+> wasn't. `RunFacts()` inner-joins `created` → `completed`, so half-emitted runs vanished from my
+> own view before I compared anything. **Always reconcile against the raw table, not a derived
+> one** — and set-compare IDs, because five of six repos matched by count and the gap only ever
+> surfaced on a set difference.
 
 ### Reconfiguring a live sink is safe
 
