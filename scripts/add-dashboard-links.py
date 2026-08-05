@@ -26,7 +26,7 @@ LIVE_JOBS = r"""LiveJobs()
          workflow_file = extract(@"([^/]+)$", 1, workflow_path)
 | extend repo_url = iff(repo_resolved,
                         strcat("https://github.com/", repo),
-                        strcat("https://github.com/repositories/", repository_id))
+                        "")
 | extend workflow_url = iff(repo_resolved and isnotempty(workflow_file),
                             strcat(repo_url, "/actions/workflows/", url_encode_component(workflow_file)), ""),
          branch_url = iff(repo_resolved and isnotempty(branch),
@@ -51,7 +51,7 @@ LIVE_RUNS = r"""LiveRuns()
          workflow_file = extract(@"([^/]+)$", 1, workflow_path)
 | extend repo_url = iff(repo_resolved,
                         strcat("https://github.com/", repo),
-                        strcat("https://github.com/repositories/", repository_id))
+                        "")
 | extend workflow_url = iff(repo_resolved and isnotempty(workflow_file),
                             strcat(repo_url, "/actions/workflows/", url_encode_component(workflow_file)), ""),
          branch_url = iff(repo_resolved and isnotempty(branch),
@@ -84,7 +84,7 @@ StuckRuns()
          workflow_file = extract(@"([^/]+)$", 1, workflow_path)
 | extend repo_url = iff(repo_resolved,
                         strcat("https://github.com/", repo),
-                        strcat("https://github.com/repositories/", repository_id))
+                        "")
 | extend workflow_url = iff(repo_resolved and isnotempty(workflow_file),
                             strcat(repo_url, "/actions/workflows/", url_encode_component(workflow_file)), ""),
          branch_url = iff(repo_resolved and isnotempty(branch),
@@ -112,7 +112,7 @@ EXPLORER_REPOS = r"""HierarchyJobs()
          repo_resolved = not(repo startswith "repo/")
 | extend repo_url = iff(repo_resolved,
                         strcat("https://github.com/", repo),
-                        strcat("https://github.com/repositories/", repository_id))
+                        "")
 | project org, repo, workflows, jobs, hours, failure_pct, repo_url
 | order by hours desc
 | take 200"""
@@ -130,7 +130,7 @@ WorkflowSummary()
          workflow_file = extract(@"([^/]+)$", 1, workflow_path)
 | extend repo_url = iff(repo_resolved,
                         strcat("https://github.com/", repo),
-                        strcat("https://github.com/repositories/", repository_id))
+                        "")
 | extend workflow_url = iff(repo_resolved and isnotempty(workflow_file),
                             strcat(repo_url, "/actions/workflows/", url_encode_component(workflow_file)), "")
 | project org, repo, workflow, runs, jobs, p50, p95, queue_p95,
@@ -152,7 +152,7 @@ JobSummary()
          workflow_file = extract(@"([^/]+)$", 1, workflow_path)
 | extend repo_url = iff(repo_resolved,
                         strcat("https://github.com/", repo),
-                        strcat("https://github.com/repositories/", repository_id))
+                        "")
 | extend workflow_url = iff(repo_resolved and isnotempty(workflow_file),
                             strcat(repo_url, "/actions/workflows/", url_encode_component(workflow_file)), "")
 | project repo, workflow, job_name, runner, runs, p50, p95, max_seconds,
@@ -177,7 +177,7 @@ EXPLORER_RUNS = r"""HierarchyJobs()
          workflow_file = extract(@"([^/]+)$", 1, workflow_path)
 | extend repo_url = iff(repo_resolved,
                         strcat("https://github.com/", repo),
-                        strcat("https://github.com/repositories/", repository_id))
+                        "")
 | extend workflow_url = iff(repo_resolved and isnotempty(workflow_file),
                             strcat(repo_url, "/actions/workflows/", url_encode_component(workflow_file)), ""),
          run_url = iff(repo_resolved,
@@ -239,7 +239,7 @@ HierarchyJobs()
          workflow_file = extract(@"([^/]+)$", 1, workflow_path)
 | extend repo_url = iff(repo_resolved,
                         strcat("https://github.com/", repo),
-                        strcat("https://github.com/repositories/", repository_id))
+                        "")
 | extend workflow_url = iff(repo_resolved and isnotempty(workflow_file),
                             strcat(repo_url, "/actions/workflows/", url_encode_component(workflow_file)), ""),
          run_url = iff(repo_resolved,
@@ -263,7 +263,7 @@ SLOWEST_JOBS = r"""HierarchyJobs()
          workflow_file = extract(@"([^/]+)$", 1, workflow_path)
 | extend repo_url = iff(repo_resolved,
                         strcat("https://github.com/", repo),
-                        strcat("https://github.com/repositories/", repository_id))
+                        "")
 | extend workflow_url = iff(repo_resolved and isnotempty(workflow_file),
                             strcat(repo_url, "/actions/workflows/", url_encode_component(workflow_file)), ""),
          run_url = iff(repo_resolved,
