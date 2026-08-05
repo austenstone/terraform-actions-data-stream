@@ -141,9 +141,9 @@
 // THE STREAM HAS NO "JOB STARTED" EVENT. It emits queued -> completed and
 // nothing in between, so a row here is "queued OR executing" and the two cannot
 // be told apart. runner_name and runner_group are empty on every created event
-// (measured 0 of 1,693 over 6h) -- runner identity only arrives at completion.
+// (measured 0 of 5,839 over 24h) -- runner identity only arrives at completion.
 // age_seconds is therefore time-since-queued, not runtime. See
-// https://github.com/austenstone/terraform-actions-data-stream/issues/21
+// https://github.com/austenstone/terraform-actions-data-stream/issues/20
 //
 // job_status on the created event is the filter that makes this work: a skipped
 // job is born "completed" and never emits a completion, so without the "queued"

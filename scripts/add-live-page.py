@@ -98,10 +98,10 @@ p95 7s, so this is genuinely near-real-time rather than a slow-moving report.
 
 **There is no "job started" event.** The stream emits `workflow_job_created`
 then `workflow_job_completed` and nothing in between, and `runner_name` is empty
-on every created event (0 of 1,693 measured over 6h). So a job here is *queued
+on every created event (0 of 5,839 measured over 24h). So a job here is *queued
 or executing* and nothing can tell you which, nor which runner picked it up.
 Age is time-since-queued, never runtime.
-[issue #21](https://github.com/austenstone/terraform-actions-data-stream/issues/21)
+[issue #20](https://github.com/austenstone/terraform-actions-data-stream/issues/20)
 
 **So don't read age as "stuck".** A 40-minute job might be compiling or might be
 waiting on a runner that will never come. `state` answers that instead: it asks
