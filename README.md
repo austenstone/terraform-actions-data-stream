@@ -566,6 +566,9 @@ Run this one first. The stream is identifiers only, so an unenriched dashboard c
 `repo 1324410793` as a filter and nothing better. One REST call per repo fixes it, and the response
 carries `owner.login` too, so orgs come free.
 
+> The three enrichment scripts below, and the dashboard build tooling, are catalogued in
+> [`scripts/README.md`](scripts/README.md).
+
 ```bash
 KUSTO_CLUSTER=https://<cluster>.<region>.kusto.windows.net python3 scripts/ingest-repos.py
 ```
