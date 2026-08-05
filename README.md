@@ -228,7 +228,7 @@ Terraform instead, point `source` at the repo — no clone, and you can pin a ve
 
 ```hcl
 module "sink" {
-  source = "git::https://github.com/austenstone/terraform-actions-data-stream.git//modules/azure-kusto?ref=main"
+  source = "git::https://github.com/austenstone/terraform-actions-data-stream.git//modules/azure-kusto?ref=v0.1.0"
 
   resource_group_name = azurerm_resource_group.this.name
   location            = azurerm_resource_group.this.location
@@ -238,9 +238,12 @@ module "sink" {
 }
 ```
 
-Pin `ref` to a tag or commit SHA for anything you care about; `main` moves. Swap the `//modules/...`
-path for `azure-blob`, `azure-event-hub` or `aws-s3` as needed — every module exposes a
-`sink_config` output you paste into the data stream configuration.
+Pin `ref` to a tag; `main` moves, and it moves in ways Terraform cannot resolve for you. The
+analytics layer contains materialized views, and [a materialized view cannot be
+altered](#changing-a-materialized-view-needs-a-manual-drop) — changing one means dropping and
+rebuilding it. Tracking `main` means a routine `terraform apply` can hand you that operation
+unannounced. Swap the `//modules/...` path for `azure-blob`, `azure-event-hub` or `aws-s3` as
+needed — every module exposes a `sink_config` output you paste into the data stream configuration.
 
 ### Azure Blob
 
