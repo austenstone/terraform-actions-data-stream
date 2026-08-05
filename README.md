@@ -84,13 +84,24 @@ most time:
   announced but never closes, so anything joining `created` → `completed` accumulates phantom open
   runs at ~1% of volume, permanently. This one grows with Copilot coding agent adoption. See
   [Is it complete?](#is-it-complete).
+- [#19](https://github.com/austenstone/terraform-actions-data-stream/issues/19) — **a sink never
+  recovers from a destination outage.** Break the destination for 11 minutes and the sink stops
+  delivering *permanently*: 79% of events lost, loss continuing 13 minutes after the destination was
+  healthy again, and no resumption until a human `PATCH`es the config. `status` reads `"active"` the
+  entire time. This is the operational one to plan for — see [Operating it](#operating-it).
 
 Plans and next steps are in
 [#7](https://github.com/austenstone/terraform-actions-data-stream/issues/7).
 
 ### Is it complete?
 
-Yes. Not one run is dropped. This is the question every enterprise asks first, and until now the
+Yes — with one scope note. This section is about **emission**: does GitHub announce every run? It
+does. Whether those events survive the trip to your destination is a separate question, and the
+answer there is worse — see
+[#19](https://github.com/austenstone/terraform-actions-data-stream/issues/19) and
+[Operating it](#operating-it).
+
+Not one run is dropped. This is the question every enterprise asks first, and until now the
 only answer was the stream agreeing with itself, which proves nothing.
 
 Reconciled against the REST API by **set-comparing run IDs** — not counts — over 30 days and 4,333
@@ -601,24 +612,58 @@ the health check with a volume check at the destination:
 ActionsEvents | where eventTimestamp > ago(30m) | count   // alert if 0 during business hours
 ```
 
-### An unhealthy sink does not recover on its own
+### A sink never recovers from a destination outage — and the loss is severe
 
-Same experiment, continued. After the table was **recreated** and the destination was healthy again,
-the sink stayed `unhealthy` for the full 8 minutes I watched it, delivering nothing —
-`consecutive_failures` frozen at 2, `checked_at` frozen. It came back only when I manually `PATCH`ed
-it with an identical config, and then delivery resumed immediately.
+This is the operational failure mode to plan for. Breaking a destination for 11 minutes cost **79%
+of events, permanently**, and the bleeding continued for 13 minutes *after* the destination was
+healthy again.
+
+Controlled experiment, two sinks on identical live traffic, one destination dropped and repaired:
+
+| Time (UTC) | Event |
+|---|---|
+| `04:40:07` | Destination table dropped. Outage begins. |
+| `04:43:20` | First failed delivery. Health → `unhealthy`, verbatim Kusto error. **Detection is good.** |
+| `04:43:20` → `05:05:19` | Health **never updates again**. `checked_at` and `consecutive_failures` frozen through ~180 more undeliverable events. |
+| `04:51:40` | Table, mapping and streaming policy fully restored. **Destination is healthy.** |
+| → `05:04:58` | **Loss continues for 13 more minutes.** The control sink delivers normally throughout. |
+| `05:05:19` | Manual no-op `PATCH`. |
+| `05:05:20` | Healthy, `consecutive_failures: 0`, delivery resumes and stays in sync. |
+
+Set-comparing `eventUuid` against the control sink: **185 of 234 events lost (79%)**. `status` read
+`"active"` the entire time — the sink list shows green while the sink is dead.
+
+The retry budget is visible in the error text — `upload failed on attempt 1 of 5` — and there is no
+durable buffer behind it. Batches still inside their five attempts when the destination recovered
+got through; batches that had exhausted them were dropped and never retried. That's why the loss
+window looks ragged rather than contiguous.
 
 ```bash
-# recovery lever after a destination outage
+# the only recovery lever: touch the config
 gh api -X PATCH /orgs/{org}/actions/data-stream/sinks/{id} --input sink.json
 ```
 
 Catch: `PATCH` validates live, so **you cannot PATCH your way out until the destination is
 independently verified working.** During the ADX schema-cache window below, the same call returned
-`422`. Fix the destination, confirm it accepts writes, *then* PATCH.
+`422`. Fix the destination, confirm it accepts writes, *then* PATCH. A `PATCH` also writes a
+`test_connection` row into your table ([#15](https://github.com/austenstone/terraform-actions-data-stream/issues/15)).
 
-Both of these are tracked in
-[#11](https://github.com/austenstone/terraform-actions-data-stream/issues/11).
+**What to actually do about it.** Health tells you a sink broke, exactly once, and then goes stale —
+so it is a trigger, not a monitor. Alert on both:
+
+```kusto
+// destination-side liveness — catches a dead sink even after health goes stale
+ActionsEvents | where eventTimestamp > ago(30m) | count   // alert if 0 during business hours
+```
+
+and treat any `health_status != "healthy"` as **requiring a human to PATCH**, not as something that
+will clear on its own. Budget for the fact that a destination blip costs materially more than the
+blip itself, and that there is no backfill — events dropped during an outage are not retained
+anywhere you can reach.
+
+Tracked in [#19](https://github.com/austenstone/terraform-actions-data-stream/issues/19)
+(data loss) and [#11](https://github.com/austenstone/terraform-actions-data-stream/issues/11)
+(the health fields).
 
 The good news: **you cannot save a broken sink.** `POST` and `PATCH` both run a real connection test
 and reject on failure. Destination drift after creation is the only way a sink goes bad.
