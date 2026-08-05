@@ -127,6 +127,9 @@ def main(limit=25, workers=6, flush=20000):
     let done = LogArchive | project run_id, attempt;
     ActionsEvents
     | where eventType == 'workflow_run_completed' and eventTimestamp > ago(7d)
+    // skipped/cancelled runs return 200 with a 22-byte empty zip -- every one is a
+    // wasted call plus a junk zero-line LogArchive row. Was 30/30 of our empties.
+    | where tostring(eventData.workflow_run_conclusion) !in ('skipped', 'cancelled')
     | project run_id = tolong(eventData.workflow_run_id),
               attempt = toint(eventData.workflow_run_attempt),
               repo_id = tolong(eventData.repository_id)

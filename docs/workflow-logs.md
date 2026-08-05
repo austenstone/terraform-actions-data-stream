@@ -146,7 +146,7 @@ GET /repositories/{repo_id}/actions/runs/{run_id}/logs               zip
 GET /repositories/{repo_id}/actions/runs/{run_id}/attempts/{n}/logs  zip
 ```
 
-### Skipped and cancelled jobs never have steps — don't call for them
+### Skipped and cancelled work has nothing to fetch — don't call for it
 
 A skipped job returns **HTTP 200 with `steps: []`**, on both the single-job and run-jobs-list
 endpoints. It looks like a failure but is correct: the job never executed, so there is nothing to
@@ -165,7 +165,22 @@ Measured over ~10,700 jobs:
 Filtering those two conclusions before you call cut API volume **45%** and took the apparent miss
 rate from 44% down to 1.6%. Skipped jobs are not an edge case — they were 43% of all job events.
 
-Implementation: [`scripts/ingest-steps.py`](../scripts/ingest-steps.py), schema and analytics in
+**The same trap exists one level up, on the run log archive.** A skipped *run* returns HTTP 200 with
+a **22-byte empty zip** — a valid, well-formed archive containing nothing. Every one of those is a
+wasted API call plus a junk zero-line row in your manifest table, which then makes archive and log
+tables fail to reconcile and looks exactly like data loss. When we checked, **30 of 30** zero-line
+manifest rows were `conclusion: skipped`. Apply the identical filter before downloading:
+
+```kusto
+| where tostring(eventData.workflow_run_conclusion) !in ('skipped', 'cancelled')
+```
+
+After that filter, a 25-run batch reported *0 unavailable* and `LogArchive` reconciled 1:1 with
+`WorkflowLogs`. Do not treat "downloaded an empty zip" as a retryable error — it is a permanent,
+correct answer for a run that never executed.
+
+Implementation: [`scripts/ingest-steps.py`](../scripts/ingest-steps.py) and
+[`scripts/ingest-logs.py`](../scripts/ingest-logs.py), schema and analytics in
 [`modules/azure-kusto/kql/enrichment.kql`](../modules/azure-kusto/kql/enrichment.kql).
 
 ### Why this matters more than the logs
