@@ -147,16 +147,20 @@
 // Step spans, parented to the job spans OtelSpans() already emits, using the
 // same githubreceiver hashing. Union this with OtelSpans() for a complete
 // run -> job -> step trace tree. This closes the gap OtelSpans() documents.
+// StepFacts().repo is the repository id carried as a string, so this must be
+// cast back to long. OtelSpans() emits repository_id as a long, and union does
+// not reconcile the two -- it silently emits repository_id_long AND
+// repository_id_string, after which OtelTraceTree() has no repository_id column
+// at all and every OTLP consumer sees two half-populated attributes.
 .create-or-alter function with (docString="Step-level OTel spans, parented to OtelSpans() job spans", folder="otel") OtelStepSpans() {
     StepFacts()
-    | where ran and duration_seconds >= 0
-    | project trace_id   = substring(hash_sha256(strcat(run_id, attempt, "t")), 0, 32),
+    | where ran and duration_seconds >= 0    | project trace_id   = substring(hash_sha256(strcat(run_id, attempt, "t")), 0, 32),
               span_id    = substring(hash_sha256(strcat(check_run_id, "-s", step_number)), 16, 16),
               parent_id  = substring(hash_sha256(strcat(check_run_id, "-j")), 16, 16),
               span_kind  = "INTERNAL",
               name       = step_name,
               start_time = started_at, end_time = completed_at,
-              run_id, attempt, repository_id = repo,
+              run_id, attempt, repository_id = tolong(repo),
               ["cicd.pipeline.name"]             = workflow_name,
               ["cicd.pipeline.run.id"]           = tostring(run_id),
               ["cicd.pipeline.task.name"]        = job_name,
