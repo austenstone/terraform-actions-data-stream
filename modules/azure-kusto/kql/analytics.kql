@@ -90,7 +90,11 @@
               runner_kind, queue_seconds, exec_seconds
 }
 
-.create-or-alter function with (docString="One row per completed run, typed and derived", folder="gold") RunFacts() {
+// LOSSY BY DESIGN. Drops any run that never emitted workflow_run_completed -- about 1% of runs,
+// mostly fork-PR approval gates (action_required) plus workflows invalid before job dispatch.
+// Never use this as the left side of a completeness audit: reconcile against the raw table
+// instead, or you will attribute this join to the stream. See issues #8 and #18.
+.create-or-alter function with (docString="One row per completed run, typed and derived. Excludes runs with no completion event (~1%, see #8)", folder="gold") RunFacts() {
     Runs
     | where isnotnull(completed_ev)
     | extend
