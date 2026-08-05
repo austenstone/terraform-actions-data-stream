@@ -58,8 +58,14 @@ jobs:
     # so nothing needs installing.
     runs-on: ubuntu-slim
     steps:
+      # The scripts live in this module's repo, not yours, so check that out
+      # explicitly and pin it to the same ref your Terraform uses. Without
+      # `repository:` this would clone the repo the workflow runs in, which has
+      # no scripts/ directory.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          repository: austenstone/terraform-actions-data-stream
+          ref: v0.1.0
           persist-credentials: false
 
       - name: Authenticate to Azure

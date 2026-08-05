@@ -29,5 +29,6 @@ module "sink" {
   cluster_name        = var.cluster_name
   sku_name            = var.sku_name
   ingestion_type      = var.ingestion_type
+  enrichment_subjects = var.enrichment_subjects
   tags                = var.tags
 }

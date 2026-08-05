@@ -48,3 +48,9 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "enrichment_subjects" {
+  description = "GitHub OIDC subjects allowed to run the enrichment scripts against this database. Empty disables the identity entirely. See examples/enrichment-workflow.yml."
+  type        = list(string)
+  default     = []
+}

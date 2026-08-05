@@ -9,6 +9,8 @@
   run the enrichment scripts with no stored Azure secret. Empty by default, so existing deployments
   plan unchanged. Output: `enrichment_identity` (`client_id`, `tenant_id`, `subscription_id`).
 - `examples/enrichment-workflow.yml` — a working hourly workflow for the above.
+- `enrichment_subjects` and an `enrichment_identity` output on `examples/azure-kusto`, so the
+  example actually exercises the feature.
 
 ### Fixed
 
@@ -17,6 +19,13 @@
   environment variable is the only one there is. The variable is now kept by default; set
   `GH_IGNORE_ENV_TOKEN=1` for the laptop case. This made the scheduled workflow above impossible to
   actually run before now.
+
+### Documented
+
+- `azurerm_kusto_script` replaces on any `script_content` change, which re-executes the whole `.kql`
+  file. The README previously called re-applying an edited view "a no-op" — true of the effect in
+  Kusto, misleading about what Terraform does. Adding an unrelated variable to an existing
+  deployment can therefore plan a script replacement you did not ask for; `-target` around it.
 
 ## v0.1.0
 

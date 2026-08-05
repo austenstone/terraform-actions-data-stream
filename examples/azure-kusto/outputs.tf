@@ -22,3 +22,8 @@ output "dashboard_json" {
   description = "Importable Kusto dashboard. terraform output -raw dashboard_json > dashboard.json"
   value       = module.sink.dashboard_json
 }
+
+output "enrichment_identity" {
+  description = "Managed identity for the enrichment workflow. Null unless enrichment_subjects is set."
+  value       = module.sink.enrichment_identity
+}

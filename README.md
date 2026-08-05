@@ -658,6 +658,12 @@ module "kusto_sink" {
 terraform output enrichment_identity   # -> client_id, tenant_id for azure/login
 ```
 
+Adding this to a deployment that is already running is additive — four resources, nothing
+destroyed — but the plan may not look that way, because any `.kql` edit you have picked up since
+your last apply forces a script replacement alongside it. See [Changing a materialized view needs a
+manual drop](#changing-a-materialized-view-needs-a-manual-drop); `-target` the four
+`*enrichment*` resources if you want just this.
+
 It is deliberately a separate identity from the one the stream uses, and it holds **Viewer +
 Ingestor**, not Admin. Enrichment has to *read* raw events to know which ids need resolving; the
 stream never should. Splitting them means a compromised sink credential still cannot read your
@@ -888,10 +894,9 @@ first ingest that you never see this.
 
 ### Changing a materialized view needs a manual drop
 
-`azurerm_kusto_script` is idempotent, so editing a materialized view in
-[`kql/analytics.kql`](modules/azure-kusto/kql/analytics.kql) and re-applying is a **no-op** — the
-script has already run and `.create ifnotexists` does nothing. Functions are fine (they use
-`.create-or-alter`), but views need:
+Editing [`kql/analytics.kql`](modules/azure-kusto/kql/analytics.kql) and re-applying **does not
+change a materialized view**, because the view definitions use `.create ifnotexists`. Functions are
+fine — they use `.create-or-alter`. Views need:
 
 ```kusto
 .drop materialized-view Jobs          // note: does NOT accept `ifexists`
@@ -900,6 +905,21 @@ script has already run and `.create ifnotexists` does nothing. Functions are fin
 
 `backfill` is create-only. `.create-or-alter materialized-view with (backfill=true)` works exactly
 once and then fails forever with *"Unsupported property in materialized view alter command"*.
+
+Do not read that as "re-applying is free". `script_content` **forces replacement** on
+`azurerm_kusto_script`, so any edit to a `.kql` file destroys and recreates the resource, which
+**re-executes the entire script**:
+
+```
+# module.sink.azurerm_kusto_script.analytics[0] must be replaced
+~ script_content = (sensitive value) # forces replacement
+```
+
+Nothing changes in Kusto, but every command in the file runs again, so one non-idempotent line
+anywhere fails the apply — and a failed `azurerm_kusto_script` still leaves the resource in Azure,
+so the next apply needs a `terraform import` before it will even plan. The practical consequence is
+that a plan touching a script is never as small as it looks: if you are adding something unrelated
+to an existing deployment, `-target` the resources you actually want.
 
 ## Cleanup
 
