@@ -156,7 +156,16 @@ def main() -> None:
     page_id = str(uuid.uuid5(NS, f"page:{PAGE}"))
 
     dash["pages"] = [p for p in dash["pages"] if p["name"] != PAGE] + [{"name": PAGE, "id": page_id}]
+    # Re-running this script drops the page it owns and any query only that page used.
+    # A parameter's dropdown query is referenced from parameters[], never from a tile,
+    # so a tile-only keep-set garbage-collects it and the client then rejects the whole
+    # dashboard with "Query id <uuid> in parameter not found".
     keep = {t["queryRef"]["queryId"] for t in dash["tiles"] if t["pageId"] != page_id and "queryRef" in t}
+    keep |= {
+        qid
+        for p in dash.get("parameters", [])
+        if (qid := ((p.get("dataSource") or {}).get("queryRef") or {}).get("queryId"))
+    }
     dash["tiles"] = [t for t in dash["tiles"] if t["pageId"] != page_id]
     dash["queries"] = [q for q in dash["queries"] if q["id"] in keep]
 

@@ -249,6 +249,15 @@
         "kind": "inline",
         "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
       },
+      "text": "RunFacts()\n| where created_at > ago(7d)\n| summarize by workflow_name\n| project value = workflow_name, label = workflow_name\n| order by label asc",
+      "id": "d5718ab8-598c-596c-8b82-0f77ca5a2a08",
+      "usedVariables": []
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
       "text": "let _ev = materialize(ActionsEvents\n| where eventTimestamp between (_startTime .. _endTime)\n// \"Test connection\" writes a real row here as an undocumented `test_connection`\n// event whose eventData is just {\"is_new_sink\": true}. Excluded so debugging a\n// sink doesn't show up as traffic. https://github.com/austenstone/terraform-actions-data-stream/issues/15\n| where eventType != \"test_connection\");\n// count()-minus-dcount() is NOT a duplicate detector: dcount is HyperLogLog and\n// was off by 51 on 21,915 rows even at accuracy 4. Count the collisions instead.\nlet _dupes = toscalar(_ev | summarize c = count() by eventUuid | summarize countif(c > 1));\nlet _dropped = toscalar(StuckRuns()\n    | where created_at between (_startTime .. _endTime)\n    | summarize countif(likely_dropped));\nlet _skipped = toscalar(JobFacts()\n    | where queued_at between (_startTime .. _endTime)\n    | summarize round(100.0 * countif(not(ran)) / count(), 1));\n_ev\n| extend lag_s = todouble(datetime_diff(\"millisecond\", ingestion_time(), eventTimestamp)) / 1000.0\n| summarize events = count(),\n            p95 = round(percentile(iff(lag_s >= 0, lag_s, real(null)), 95), 1)\n| extend Rows = pack_array(\n    pack_array(\"Events ingested\", tostring(events)),\n    pack_array(\"Ingest lag p95\", strcat(tostring(p95), \" s\")),\n    pack_array(\"Duplicate events\", tostring(_dupes)),\n    pack_array(\"Dropped completions\", tostring(_dropped)),\n    pack_array(\"Jobs skipped\", strcat(tostring(_skipped), \" %\")))\n| mv-expand Rows\n| project title = tostring(Rows[0]), value = tostring(Rows[1])",
       "id": "bb46560e-0632-50c2-a7c9-614a055a2550",
       "usedVariables": [
