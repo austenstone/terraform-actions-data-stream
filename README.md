@@ -560,6 +560,26 @@ One data gap versus `githubreceiver` remains: no repo name or actor login (ident
 step-span gap is **closed** — see [Step facts](#step-facts) below, which produces 47k step spans
 that parent onto the job spans with a 100% hit rate.
 
+### Repo and owner names
+
+Run this one first. The stream is identifiers only, so an unenriched dashboard can offer you
+`repo 1324410793` as a filter and nothing better. One REST call per repo fixes it, and the response
+carries `owner.login` too, so orgs come free.
+
+```bash
+KUSTO_CLUSTER=https://<cluster>.<region>.kusto.windows.net python3 scripts/ingest-repos.py
+```
+
+Populates `Repos`, which backs `RepoNames()` and every `Hierarchy*()` function. Incremental — it
+only resolves ids it hasn't seen, so re-running is cheap (17 repos in ~2s) and it's worth putting on
+a schedule, since repos are created continuously.
+
+Rows are **appended, never replaced**, and readers take the newest row per id. Repos get renamed and
+transferred between orgs; keeping the history means a six-month-old run still resolves to the name it
+had at the time instead of silently retconning. Deleted repos are recorded as unresolved with a
+`repo/{id}` label rather than dropped, so their runs stay countable — a deleted repo 404s *forever*,
+so without that record you'd retry it on every pass and still lose the history.
+
 ### Step facts
 
 The stream carries no step data, but it does carry `check_run_id` — which, despite the name, **is the
@@ -628,8 +648,8 @@ terraform output -raw dashboard_json > dashboard.json
 ```
 
 Import it in [Kusto Web Explorer](https://dataexplorer.azure.com) (**Dashboards → New dashboard →
-Import from file**), or into Fabric with `fab import`. Five pages, twenty-six tiles, built entirely
-on the gold and step functions:
+Import from file**), or into Fabric with `fab import`. Seven pages, forty-one tiles, built entirely
+on the gold, hierarchy and step functions:
 
 | Page | Answers |
 |---|---|
@@ -638,6 +658,8 @@ on the gold and step functions:
 | **Where time goes** | What is CI wasting? Failure hotspots, orchestration overhead, minutes lost queueing, longest jobs. |
 | **Stream health** | Is the feed itself trustworthy? Ingestion lag percentiles, event mix, duplicate detection, delivery gaps. |
 | **Steps** | Which *step* is slow or flaky? Time sinks with a p95/p50 spread column, runner overhead split, failure hotspots by wasted hours, the slow tail. Requires `ingest-steps.py`. |
+| **Explorer** | Drill org → repo → workflow → job → step, then read the log lines of the step that failed. Requires `ingest-repos.py` for names. |
+| **Live** | What is running *right now*? In-flight jobs and runs, queue depth, and how long the oldest thing has been waiting. |
 
 Both filters — the time range and a workflow multi-select — are wired to every tile.
 
@@ -650,6 +672,19 @@ executed against a live cluster, so an empty tile means no matching data, not a 
 > the write path checks it — the API, `fab`, and Terraform will all happily ship a document the
 > browser client then refuses to load, and the client's only feedback is a single misleading
 > sentence. Ask me how I know.
+
+If your dashboard already lives in Fabric, `scripts/publish-dashboard.py` is the update path that
+survives repeated edits. It renders the template, hard-fails if any `${…}` placeholder survived
+substitution, and pushes via `updateDefinition` so the item id and its share links stay stable:
+
+```bash
+FABRIC_WORKSPACE=<workspace-guid> FABRIC_ITEM=<item-guid> \
+  KUSTO_CLUSTER=https://<cluster>.<region>.kusto.windows.net \
+  python3 scripts/publish-dashboard.py
+```
+
+The surviving-placeholder check is the point. An unsubstituted `${cluster_uri}` produces a dashboard
+that imports cleanly and then fails to query anything, which looks identical to an empty cluster.
 
 One thing the dashboard cannot show you: **cost**. The stream carries no billable minutes and no
 runner SKU. Every duration is wall clock. `job_labels` and `runner_group_name` are the only runner

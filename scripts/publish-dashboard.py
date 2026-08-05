@@ -9,7 +9,7 @@ literal placeholder, throws, and its own error handler dies before it can
 render the failure. Nothing shows up in the cluster's query log because no
 query is ever sent. Always publish through here.
 
-Env: FABRIC_WORKSPACE, FABRIC_ITEM, KUSTO_CLUSTER_URI, KUSTO_DATABASE
+Env: FABRIC_WORKSPACE, FABRIC_ITEM, KUSTO_CLUSTER (or KUSTO_CLUSTER_URI), KUSTO_DATABASE
 """
 import base64
 import json
@@ -20,19 +20,44 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DASH = ROOT / "modules/azure-kusto/dashboard/RealTimeDashboard.json"
-VALIDATOR = pathlib.Path.home() / "source/austenstone-notes/.github/skills/fabric-dashboards/scripts/validate_dashboard.py"
 
-WORKSPACE = os.environ.get("FABRIC_WORKSPACE", "d04c130d-dbea-4cde-906a-f1ba2d4c80b0")
-ITEM = os.environ.get("FABRIC_ITEM", "0001e273-a7ae-4e4d-9742-53ca051a2158")
-CLUSTER = os.environ.get("KUSTO_CLUSTER_URI", "https://austenadskusto.eastus2.kusto.windows.net")
+# The schema validator is the only thing standing between you and a dashboard
+# that writes successfully and then refuses to render. Look for it in the repo
+# first, then an explicit override, then the skills checkout it originally
+# shipped from. If none exist we warn rather than skip quietly -- a silent
+# no-op here is how a broken document reaches the browser.
+VALIDATOR = next(
+    (p for p in (
+        ROOT / "scripts/validate_dashboard.py",
+        pathlib.Path(os.environ["DASHBOARD_VALIDATOR"]) if os.environ.get("DASHBOARD_VALIDATOR") else None,
+        pathlib.Path.home() / "source/austenstone-notes/.github/skills/fabric-dashboards/scripts/validate_dashboard.py",
+    ) if p and p.exists()),
+    None,
+)
+
+
+def required(*names):
+    for n in names:
+        if os.environ.get(n):
+            return os.environ[n]
+    sys.exit(f"set {names[0]} (this script publishes to *your* Fabric workspace, "
+             f"so there is deliberately no default)")
+
+
+WORKSPACE = required("FABRIC_WORKSPACE")
+ITEM = required("FABRIC_ITEM")
+CLUSTER = required("KUSTO_CLUSTER", "KUSTO_CLUSTER_URI")
 DATABASE = os.environ.get("KUSTO_DATABASE", "ActionsDataStream")
 
 
 def main():
     raw = DASH.read_text()
-    if VALIDATOR.exists():
+    if VALIDATOR:
         if subprocess.run([sys.executable, str(VALIDATOR), str(DASH)]).returncode != 0:
             sys.exit("validation failed, refusing to publish")
+    else:
+        print("WARNING: no schema validator found, publishing unvalidated. "
+              "Set DASHBOARD_VALIDATOR to enable the check.", file=sys.stderr)
 
     rendered = raw.replace("${cluster_uri}", CLUSTER).replace("${database}", DATABASE)
     doc = json.loads(rendered)
