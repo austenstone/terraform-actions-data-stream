@@ -19,6 +19,12 @@ workflow_run_completed  ──►  fetch that one run's logs  ──►  parse  
 
 No polling. No public webhook endpoint. One API call per workflow run.
 
+**If what you want is step-level timings rather than log text, skip the logs entirely.**
+`workflow_job_completed` carries `check_run_id`, which is the public REST job id, and one call on it
+returns every step with exact timings — no parsing, no filename matching, ~1 KB per job instead of
+megabytes. See [the job API section](#the-better-path-for-step-timings-the-job-api). Most people
+asking for "logs" actually want this.
+
 ---
 
 ## First: the rate limit is almost certainly not your problem
@@ -87,8 +93,8 @@ Log lines are `RFC3339 nano timestamp` + space + message, with a BOM at file sta
 2026-08-05T14:55:19.4901188Z ##[endgroup]
 ```
 
-- `##[group]` / `##[endgroup]` delimit **steps** — this is how you get step-level granularity
 - `##[error]` / `##[warning]` / `##[notice]` carry **severity**
+- `##[group]` / `##[endgroup]` delimit **log groups** — useful, but see the warning below
 - Compression measured at ~2.4:1 on small runs
 
 That maps onto OTel with no cleverness required:
@@ -98,7 +104,92 @@ That maps onto OTel with no cleverness required:
 | leading timestamp | `Timestamp` |
 | `##[error]` / `##[warning]` / `##[notice]` | `SeverityNumber` / `SeverityText` |
 | remainder of the line | `Body` |
-| enclosing `##[group]` | `cicd.pipeline.task.name` |
+
+### ⚠️ `##[group]` is not a step
+
+The obvious move is to treat every `##[group]` as a step boundary and call it step-level
+granularity. It isn't, and the error is large.
+
+A single CodeQL `Analyze (javascript)` job has **8 real steps**, but its log contains groups named
+`Runner Image Provisioner`, `Operating System`, `Runner Image` — all of which live *inside* the one
+`Set up job` step. Any action is free to emit as many groups as it likes, and plenty of steps emit
+none. Measured against real step names, log-derived "steps" matched only **58%** of the time.
+
+Groups are still worth extracting — they are the only view into what an action did internally — but
+they answer a different question. For real steps, use the job API below.
+
+---
+
+## The better path for step timings: the job API
+
+You do not need to parse logs to get step-level data at all. Every `workflow_job_completed` event
+carries `check_run_id`, and **that is the public REST job id**. One call returns the job's real
+display name and every step with exact start/end timestamps and conclusions.
+
+⚠️ **The event's `job_id` field is an internal id and 404s on every REST route.** This is the single
+most expensive trap in the payload — the field that looks right is the one that doesn't work.
+
+| Field in the event | Use |
+|---|---|
+| `job_id` | ❌ internal only, resolves to nothing |
+| `check_run_id` | ✅ the public workflow-job id |
+
+All of these accept a **numeric repository id**, so nothing needs an owner/repo lookup — the event's
+`repository_id` is sufficient on its own. This ID-based routing is undocumented; the published docs
+only show the `{owner}/{repo}` form.
+
+```
+GET /repositories/{repo_id}/actions/jobs/{check_run_id}              job + steps[]
+GET /repositories/{repo_id}/actions/jobs/{check_run_id}/logs         plain text (not a zip)
+GET /repositories/{repo_id}/actions/runs/{run_id}/jobs               job list, steps[] included
+GET /repositories/{repo_id}/actions/runs/{run_id}/logs               zip
+GET /repositories/{repo_id}/actions/runs/{run_id}/attempts/{n}/logs  zip
+```
+
+### Skipped and cancelled jobs never have steps — don't call for them
+
+A skipped job returns **HTTP 200 with `steps: []`**, on both the single-job and run-jobs-list
+endpoints. It looks like a failure but is correct: the job never executed, so there is nothing to
+report. The signature is `conclusion: skipped`, `runner_name: null`, and a `completed_at` that
+precedes `started_at`.
+
+Measured over ~10,700 jobs:
+
+| `job_conclusion` | jobs | steps returned |
+|---|---|---|
+| success | 5,448 | ✅ |
+| failure | 666 | ✅ |
+| **skipped** | **4,626** | **0.0%** |
+| **cancelled** | **4** | **0.0%** |
+
+Filtering those two conclusions before you call cut API volume **45%** and took the apparent miss
+rate from 44% down to 1.6%. Skipped jobs are not an edge case — they were 43% of all job events.
+
+Implementation: [`scripts/ingest-steps.py`](../scripts/ingest-steps.py), schema and analytics in
+[`modules/azure-kusto/kql/enrichment.kql`](../modules/azure-kusto/kql/enrichment.kql).
+
+### Why this matters more than the logs
+
+Step facts are ~1 KB per job. Log bodies were 165 MB for 148 runs, and **one run accounted for 83%
+of all lines**. If what you actually want is "which step is slow" or "which step fails", the job API
+answers it for roughly 1/1000th the storage — and it gives you the real step name, which the logs
+cannot.
+
+It also closes the one gap in the OTel story. `OtelSpans()` emits run and job spans; `OtelStepSpans()`
+in the enrichment layer adds the leaf spans, parented onto the job spans with the same hashing
+scheme. Measured: **47,122 step spans, 100.0% of them resolving to a real parent job span.**
+
+---
+
+## The stream has no job display name
+
+Worth knowing before you plan any join. The `workflow_job_completed` payload has **no job name
+field** — only `job_key`, which is the workflow-file key (`analyze.javascript`, `matrix._1`).
+
+Every leg of a matrix collapses to `matrix._1`, `matrix._2`, so matrix jobs are indistinguishable
+from each other and from the display names shown in the UI, in logs, and in the REST API. Splitting
+`job_key` on `.` is lossy; joining to log filenames matched 58%. The only reliable fix is the
+`check_run_id` → job API call above, which returns `name` directly.
 
 ---
 

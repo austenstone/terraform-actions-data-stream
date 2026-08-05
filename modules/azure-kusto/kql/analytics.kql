@@ -140,7 +140,10 @@
 // emitted from inside a runner by run-with-telemetry. Attribute names follow
 // the OTel cicd.* semantic conventions (Release Candidate as of 2026).
 //
-// Not emitted: step-level spans. The stream carries no step data.
+// Not emitted here: step-level spans. The stream carries no step data, but the
+// REST job API does -- see kql/enrichment.kql. OtelStepSpans() there parents
+// onto these job spans using the same hashing scheme, giving a complete
+// run -> job -> step tree via OtelTraceTree().
 
 .create-or-alter function with (docString="OTel cicd.* spans, githubreceiver-compatible IDs", folder="otel") OtelSpans() {
     let runs = RunFacts()

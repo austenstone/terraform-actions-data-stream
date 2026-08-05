@@ -106,6 +106,12 @@ variable "create_analytics" {
   default     = true
 }
 
+variable "create_enrichment" {
+  description = "Create the enrichment layer: WorkflowSteps and WorkflowLogs tables plus StepFacts(), StepStats(), JobTimeSplit(), StepFailures(), OtelStepSpans() and friends. Schema only -- populate it with scripts/ingest-steps.py and scripts/ingest-logs.py, which fetch step timings and log bodies from the REST API using ids the stream emits. See modules/azure-kusto/kql/enrichment.kql."
+  type        = bool
+  default     = true
+}
+
 variable "tags" {
   description = "Tags applied to created resources."
   type        = map(string)

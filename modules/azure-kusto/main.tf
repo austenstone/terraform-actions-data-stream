@@ -142,3 +142,22 @@ resource "azurerm_kusto_script" "analytics" {
 
   depends_on = [azurerm_kusto_script.schema]
 }
+
+# Enrichment layer. Schema only -- the step and log tables are populated by the
+# ingesters in scripts/, which pull from the REST API using ids the stream emits.
+# Separate script so you can take the analytics without the enrichment.
+locals {
+  enrichment = file("${path.module}/kql/enrichment.kql")
+}
+
+resource "azurerm_kusto_script" "enrichment" {
+  count = var.create_enrichment ? 1 : 0
+
+  name                               = "actions-data-stream-enrichment"
+  database_id                        = azurerm_kusto_database.this.id
+  script_content                     = local.enrichment
+  continue_on_errors_enabled         = false
+  force_an_update_when_value_changed = sha256(local.enrichment)
+
+  depends_on = [azurerm_kusto_script.analytics]
+}
