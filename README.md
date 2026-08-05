@@ -638,6 +638,16 @@ table, the reference architecture, and the reconciliation sweep you need to make
 
 ### Running enrichment on a schedule
 
+Since the dashboard tables became clickable this stopped being cosmetic. A `repository_id` that
+`Repos` has not resolved yet produces an empty URL, so that row renders as plain text while its
+neighbours are links — the table looks inconsistent rather than obviously stale, and there is no
+error anywhere to tell you why. There is no web URL that takes a numeric id, so guessing one is not
+an option: `api.github.com/repositories/{id}` is a real API endpoint (it is what these scripts call)
+but `github.com/repositories/{id}` is **not a route** and 404s even when you are signed in. The only
+fix is resolving the id to `owner/name` before the dashboard needs it. Measured here on 2026-08-05,
+drift reached 19 unresolved repos out of 889 — 98.5% of job rows still linked, which is exactly the
+failure mode that goes unnoticed.
+
 All three scripts are incremental, so the natural home for them is a scheduled workflow rather than
 your laptop. [`examples/enrichment-workflow.yml`](examples/enrichment-workflow.yml) is a working one:
 hourly, no stored Azure secret, `ubuntu-slim` (which already carries the Azure CLI, the GitHub CLI
