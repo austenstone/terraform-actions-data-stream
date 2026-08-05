@@ -54,6 +54,13 @@ most time:
 - [#12](https://github.com/austenstone/terraform-actions-data-stream/issues/12) — Event Hubs sends
   over the 2014-era Service Bus REST API with no partition key, so events land round-robin and
   per-run ordering is impossible.
+- [#14](https://github.com/austenstone/terraform-actions-data-stream/issues/14) — **you get two
+  sinks per org.** The third create returns `429 Too Many Requests` with an HTML body, so it reads
+  as a rate limit and no amount of backoff clears it. Delete a sink and the next create succeeds
+  instantly. Budget your two slots before you start.
+- [#15](https://github.com/austenstone/terraform-actions-data-stream/issues/15) — **Test connection
+  writes a real row into your destination**, as an undocumented sixth event type
+  `test_connection`. Filter `eventType != "test_connection"` in any raw-table query.
 
 Plans and next steps are in
 [#7](https://github.com/austenstone/terraform-actions-data-stream/issues/7).
@@ -82,6 +89,15 @@ Enterprises use `actions-data-stream:enterprise/<numeric-enterprise-id>`.
 
 The audience is `api://AzureADTokenExchange` on Azure and `sts.amazonaws.com` on AWS. The issuer is
 `https://token.actions.githubusercontent.com` on both. All three are set for you by these modules.
+
+The subject is scoped to the **org**, not the sink. There is no `sink_id` in it, so one managed
+identity (or one IAM role) serves every sink you create — you do not need a new federated credential
+per destination. Deploy [`modules/azure-identity`](modules/azure-identity) once and reuse its
+`client_id` across all of them.
+
+Enterprise-scoped sinks exist at `/enterprises/{slug}/actions/data-stream/sinks` and use
+`actions-data-stream:enterprise/<id>`, but they need enterprise-owner rights — org admin gets a 404.
+If you want one, find your enterprise owner first.
 
 ## Quick start
 
@@ -136,6 +152,12 @@ the data stream sends over the legacy Service Bus REST endpoint (`/messages?api-
 and exposes no partition key, so events land round-robin. Combined with the documented lack of
 ordering guarantees, **do not expect per-repo or per-run ordering out of Event Hubs**, even with a
 single consumer. See [#12](https://github.com/austenstone/terraform-actions-data-stream/issues/12).
+
+Budget extra time debugging this one: Event Hubs returns a bare **`401` with an empty body** for
+both a missing `Azure Event Hubs Data Sender` role *and* a hub name that doesn't exist. Blob and
+Kusto pass their destination's real error through (`AuthorizationPermissionMismatch`,
+`BadRequest_EntityNotFound`); Event Hubs tells you nothing. Check the hub name before you go
+hunting for a role assignment.
 
 ### AWS S3
 
@@ -499,7 +521,16 @@ A freshly created sink does drop some events during registration — a second si
 `23:08:18Z` missed 2 of the 6 events in the following three minutes, then matched perfectly from
 then on. Don't benchmark fan-out fidelity until a sink has been up for ~5 minutes.
 
-The per-org sink cap is untested; I've only run two.
+The per-org sink cap is **two**. The third `POST` returns `429 Too Many Requests` — which reads as a
+rate limit but is a quota; no amount of backoff clears it, and deleting a sink makes the next create
+succeed immediately. See [#14](https://github.com/austenstone/terraform-actions-data-stream/issues/14).
+Two slots is enough for "hot path + archive", not enough to add a non-prod destination alongside them.
+
+Fan-out fidelity itself is exact. Over a 25-minute window with both sinks warm, sink A and sink B
+received **304 of 304** identical events, and `eventUuid` is the *same value* in both — it identifies
+the event, not the delivery. So a consumer merging two sinks can dedupe on it. The only rows that
+differ between destinations are `test_connection` probes, which go only to the sink being tested
+([#15](https://github.com/austenstone/terraform-actions-data-stream/issues/15)).
 
 ### ADX streaming ingestion caches table schema for ~5 minutes
 

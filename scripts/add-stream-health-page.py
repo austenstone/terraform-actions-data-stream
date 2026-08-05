@@ -15,8 +15,14 @@ DASH = pathlib.Path(__file__).resolve().parent.parent / "modules/azure-kusto/das
 NS = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 PAGE = "Stream health"
 
+# Test connection writes a real row into the destination as an undocumented
+# sixth event type. Filtered here so it can't inflate throughput. See issue #15.
 WINDOW = """let _ev = materialize(ActionsEvents
-| where eventTimestamp between (_startTime .. _endTime));"""
+| where eventTimestamp between (_startTime .. _endTime)
+// "Test connection" writes a real row here as an undocumented `test_connection`
+// event whose eventData is just {"is_new_sink": true}. Excluded so debugging a
+// sink doesn't show up as traffic. https://github.com/austenstone/terraform-actions-data-stream/issues/15
+| where eventType != "test_connection");"""
 
 SCORECARD = (
     WINDOW
