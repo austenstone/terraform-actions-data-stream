@@ -529,6 +529,17 @@ replaces the ingest side of `githubreceiver`, not the egress side.
 Two data gaps versus `githubreceiver`: no step-level spans (the stream carries no step data), and no
 repo name or actor login (identifiers only).
 
+### Log bodies
+
+The stream carries **no log text, ever** — `eventData` is identifiers only. If you need the actual
+run logs in Azure or Splunk, the paved path is to use the stream as an event-driven *trigger* and the
+REST API as the *payload*: one rate-limit unit per run, and the archive download itself is
+unauthenticated and unmetered. That also closes the step-span gap above, since `##[group]` markers in
+the log delimit steps.
+
+See **[docs/workflow-logs.md](docs/workflow-logs.md)** for the measured numbers, the reference
+architecture, and the reconciliation sweep you need to make it durable.
+
 ## Dashboard
 
 The Kusto module ships an importable dashboard, already pointed at your cluster and database:
