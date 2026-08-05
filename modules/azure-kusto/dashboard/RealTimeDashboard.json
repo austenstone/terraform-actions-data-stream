@@ -300,6 +300,71 @@
         "_endTime",
         "_startTime"
       ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "let f = StepFacts()\n| where started_at between (_startTime .. _endTime)\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow);\nf\n| summarize steps = count(), jobs = dcount(check_run_id), runs = dcount(run_id),\n            names = dcount(step_name), ran = countif(ran)\n| extend Rows = pack_array(\n    pack_array(\"Steps\", tostring(steps)),\n    pack_array(\"Jobs covered\", tostring(jobs)),\n    pack_array(\"Runs covered\", tostring(runs)),\n    pack_array(\"Distinct step names\", tostring(names)),\n    pack_array(\"Steps that executed\", strcat(tostring(round(100.0 * ran / steps, 1)), \"%\")))\n| mv-expand Rows\n| project title = tostring(Rows[0]), value = tostring(Rows[1])",
+      "id": "b15e3f08-50ab-56ab-a61e-a979cb7a1582",
+      "usedVariables": [
+        "_endTime",
+        "_startTime",
+        "_workflow"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "StepFacts()\n| where started_at between (_startTime .. _endTime)\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow)\n| where ran and not(synthetic)\n| summarize runs = count(), workflows = dcount(workflow_name),\n            p50 = percentile(duration_seconds, 50), p95 = percentile(duration_seconds, 95),\n            max_s = max(duration_seconds), total_h = sum(duration_seconds) / 3600.0,\n            failures = countif(step_conclusion == \"failure\") by step_name\n| where runs >= 5\n| top 20 by total_h desc\n| project [\"Step\"] = step_name, [\"Runs\"] = runs, [\"Workflows\"] = workflows,\n          [\"p50 s\"] = round(p50, 1), [\"p95 s\"] = round(p95, 1), [\"Max s\"] = round(max_s, 1),\n          [\"Total h\"] = round(total_h, 1),\n          [\"Spread\"] = strcat(tostring(round(iff(p50 > 0, p95 / p50, 0.0), 0)), \"x\"),\n          [\"Fail %\"] = round(100.0 * failures / runs, 1)",
+      "id": "24ec6af7-fac5-56d5-9951-303cbfe67d03",
+      "usedVariables": [
+        "_endTime",
+        "_startTime",
+        "_workflow"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "StepFacts()\n| where started_at between (_startTime .. _endTime)\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow)\n| where ran\n| summarize authored = sumif(duration_seconds, not(synthetic)),\n            overhead = sumif(duration_seconds, synthetic) by check_run_id\n| where authored + overhead > 0\n| extend pct = 100.0 * overhead / (authored + overhead)\n| summarize jobs = count(), ah = sum(authored) / 3600.0, oh = sum(overhead) / 3600.0,\n            p50 = percentile(pct, 50), p90 = percentile(pct, 90), p99 = percentile(pct, 99)\n| extend Rows = pack_array(\n    pack_array(\"Jobs measured\", tostring(jobs)),\n    pack_array(\"Authored work\", strcat(tostring(round(ah, 1)), \" h\")),\n    pack_array(\"Runner overhead\", strcat(tostring(round(oh, 1)), \" h\")),\n    pack_array(\"Overhead share\", strcat(tostring(round(100.0 * oh / (ah + oh), 1)), \"%\")),\n    pack_array(\"Per job p50\", strcat(tostring(round(p50, 1)), \"%\")),\n    pack_array(\"Per job p90\", strcat(tostring(round(p90, 1)), \"%\")),\n    pack_array(\"Per job p99\", strcat(tostring(round(p99, 1)), \"%\")))\n| mv-expand Rows\n| project [\"Measure\"] = tostring(Rows[0]), [\"Value\"] = tostring(Rows[1])",
+      "id": "b41c0e14-eb1a-5485-ad48-740dffced427",
+      "usedVariables": [
+        "_endTime",
+        "_startTime",
+        "_workflow"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "StepFacts()\n| where started_at between (_startTime .. _endTime)\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow)\n| where ran and not(synthetic)\n| summarize total = count(), failures = countif(step_conclusion == \"failure\"),\n            repos = dcountif(repo, step_conclusion == \"failure\"),\n            wasted_h = sumif(duration_seconds, step_conclusion == \"failure\") / 3600.0,\n            last_failure = maxif(started_at, step_conclusion == \"failure\") by step_name\n| where failures > 0\n| top 20 by wasted_h desc\n| project [\"Step\"] = step_name, [\"Failures\"] = failures, [\"Runs\"] = total,\n          [\"Fail %\"] = round(100.0 * failures / total, 1), [\"Repos\"] = repos,\n          [\"Wasted h\"] = round(wasted_h, 2), [\"Last failed\"] = last_failure",
+      "id": "dbf1d64b-2d75-55e5-9983-4ee731ef3faf",
+      "usedVariables": [
+        "_endTime",
+        "_startTime",
+        "_workflow"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "StepFacts()\n| where started_at between (_startTime .. _endTime)\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow)\n| where ran and not(synthetic)\n| top 12 by duration_seconds desc\n| project step = strcat(substring(step_name, 0, 34), \" #\", tostring(step_number)),\n          minutes = round(duration_seconds / 60.0, 1)\n| order by minutes asc",
+      "id": "9b343b27-2aa4-5882-9ef8-add4f3dd1381",
+      "usedVariables": [
+        "_endTime",
+        "_startTime",
+        "_workflow"
+      ]
     }
   ],
   "tiles": [
@@ -1000,6 +1065,191 @@
       },
       "markdownText": "### Why this page exists\n\n`sink_health` only advances on connection tests, so a sink that has delivered nothing\nfor an hour still reports `healthy`. **Health is failure-fast but success-blind** --\nthis page is the success signal.\n\n- **Ingest lag** is `ingestion_time() - eventTimestamp`. Measured p50 ~5s, p95 ~7s.\n  A sustained climb means the destination is backing up, not that GitHub is slow.\n- **Duplicate events** should be 0. Delivery is at-least-once by contract, so a\n  non-zero value here is expected behaviour, not an incident -- dedupe on `eventUuid`.\n- **Dropped completions** are runs that emitted `created` and never `completed`\n  because they dispatched no job. ~1.2% of runs. They are not stuck, they are gone.\n- **Jobs skipped** is ~40% on a busy org. Skipped jobs carry all-zero timings and\n  must be filtered before any duration maths -- `JobFacts()` exposes `ran` for this.\n\nZero events with a `healthy` sink is the alert worth wiring: `ActionsEvents | where\neventTimestamp > ago(30m) | count`.",
       "visualOptions": {}
+    },
+    {
+      "id": "eacac9b1-889d-5062-83f3-52b3908ba006",
+      "title": "Step coverage \u2014 selected range",
+      "visualType": "multistat",
+      "pageId": "fdd2ec42-e574-5b9b-be46-e824cb5a43af",
+      "layout": {
+        "x": 0,
+        "y": 0,
+        "width": 24,
+        "height": 6
+      },
+      "visualOptions": {
+        "colorRulesDisabled": false,
+        "colorRules": [],
+        "colorStyle": "light",
+        "multiStat__valueColumn": "value",
+        "multiStat__labelColumn": "title",
+        "multiStat__displayOrientation": "horizontal",
+        "multiStat__textSize": "auto",
+        "multiStat__slot": {
+          "width": 5,
+          "height": 1
+        },
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "b15e3f08-50ab-56ab-a61e-a979cb7a1582"
+      },
+      "description": "Real steps from the job API, not log groups"
+    },
+    {
+      "id": "6eb6b9a8-032a-5265-842b-2cb16297dbc1",
+      "title": "Where the time actually goes",
+      "visualType": "table",
+      "pageId": "fdd2ec42-e574-5b9b-be46-e824cb5a43af",
+      "layout": {
+        "x": 0,
+        "y": 6,
+        "width": 12,
+        "height": 9
+      },
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "colorRules": [],
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "24ec6af7-fac5-56d5-9951-303cbfe67d03"
+      },
+      "description": "Authored steps only, ranked by total wall time"
+    },
+    {
+      "id": "dfb59593-9fbf-599c-be55-98c46f4de4ea",
+      "title": "Runner overhead per job",
+      "visualType": "table",
+      "pageId": "fdd2ec42-e574-5b9b-be46-e824cb5a43af",
+      "layout": {
+        "x": 12,
+        "y": 6,
+        "width": 12,
+        "height": 9
+      },
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "colorRules": [],
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "b41c0e14-eb1a-5485-ad48-740dffced427"
+      },
+      "description": "Setup + teardown as a share of job wall time"
+    },
+    {
+      "id": "ca37f4c1-ef40-518f-bcb3-654819fb6676",
+      "title": "Step failure hotspots",
+      "visualType": "table",
+      "pageId": "fdd2ec42-e574-5b9b-be46-e824cb5a43af",
+      "layout": {
+        "x": 0,
+        "y": 15,
+        "width": 12,
+        "height": 9
+      },
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "colorRules": [],
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "dbf1d64b-2d75-55e5-9983-4ee731ef3faf"
+      },
+      "description": "Ranked by hours burned on work that failed"
+    },
+    {
+      "id": "28af4136-3d85-5897-9bdb-dce55e5f9861",
+      "title": "Slowest single step executions",
+      "visualType": "stackedcolumn",
+      "pageId": "fdd2ec42-e574-5b9b-be46-e824cb5a43af",
+      "layout": {
+        "x": 12,
+        "y": 15,
+        "width": 12,
+        "height": 9
+      },
+      "visualOptions": {
+        "xColumn": "step",
+        "yColumns": [
+          "minutes"
+        ],
+        "seriesColumns": null,
+        "hideLegend": true,
+        "legendLocation": "bottom",
+        "xColumnTitle": "",
+        "xAxisScale": "linear",
+        "yAxisScale": "linear",
+        "multipleYAxes": {
+          "base": {
+            "id": "-1",
+            "columns": [],
+            "label": "",
+            "yAxisMaximumValue": null,
+            "yAxisMinimumValue": null,
+            "yAxisScale": "linear",
+            "horizontalLines": []
+          },
+          "additional": [],
+          "showMultiplePanels": false
+        },
+        "verticalLine": "",
+        "selectedDataOnLoad": {
+          "all": false,
+          "limit": 10
+        },
+        "dataPointsTooltip": {
+          "all": false,
+          "limit": 10
+        },
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "9b343b27-2aa4-5882-9ef8-add4f3dd1381"
+      },
+      "description": "The tail, not the average"
+    },
+    {
+      "id": "f3c6abab-e031-515e-bcc4-32718b4621b5",
+      "title": "How to read this",
+      "visualType": "markdownCard",
+      "pageId": "fdd2ec42-e574-5b9b-be46-e824cb5a43af",
+      "layout": {
+        "x": 0,
+        "y": 24,
+        "width": 24,
+        "height": 6
+      },
+      "visualOptions": {},
+      "description": "",
+      "markdownText": "These are **real steps**, resolved from the REST job API using `check_run_id` from the data stream. They are not `##[group]` markers scraped from logs \u2014 those matched real step names only 58% of the time, because one step can emit many groups and many steps emit none.\n\n- **Synthetic steps are excluded from the time sinks.** `Set up job`, `Post *` and `Complete job` are runner overhead, not your CI. They get their own tile instead of drowning out authored work.\n- **Skipped and cancelled jobs are absent by design.** They return `steps: []` from the API because they never executed. They were 43% of all job events.\n- **Spread is p95 \u00f7 p50.** A high spread is a cache-miss story: the median run is fine and the tail is not. That is usually more actionable than a slow median.\n- **A 100% failure rate is often `continue-on-error`.** Polling and label-check steps show up here legitimately. Read the failure count alongside the wasted hours."
     }
   ],
   "pages": [
@@ -1018,6 +1268,10 @@
     {
       "name": "Stream health",
       "id": "f86dc82b-2ec7-5374-9f0d-1831ef704d2f"
+    },
+    {
+      "name": "Steps",
+      "id": "fdd2ec42-e574-5b9b-be46-e824cb5a43af"
     }
   ],
   "embeddedApps": []
