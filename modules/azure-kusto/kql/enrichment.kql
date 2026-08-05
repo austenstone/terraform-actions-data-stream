@@ -482,3 +482,37 @@
     | order by sort_job asc, depth asc, sort_step asc, started_at asc
     | project-away depth, sort_job, sort_step
 }
+
+// ------------------------------------------------------------------ live
+//
+// Name-resolved wrappers over the stream-only InFlightJobs()/InFlightRuns() in
+// analytics.kql, exactly as HierarchyJobs() wraps JobFacts(). leftouter so a job
+// in a repo that has not been ingested into Repos yet still shows up -- it will
+// carry the id instead of a name rather than vanishing from a live count, which
+// matters more here than anywhere else because brand new repos are precisely the
+// ones someone is watching.
+
+.create-or-alter function with (docString="In-flight jobs with org and repo names", folder="live") LiveJobs(lookback:timespan = 3d) {
+    InFlightJobs(lookback)
+    | lookup kind=leftouter (RepoNames() | project repository_id, org, repo) on repository_id
+    | extend repo = coalesce(repo, strcat("repo:", tostring(repository_id)))
+    | project org, repo, workflow, job_name, labels, label_served, queued_at, age_seconds,
+              branch, trigger, run_id, attempt, job_id, check_run_id, repository_id
+    | order by age_seconds desc
+}
+
+.create-or-alter function with (docString="In-flight runs with org and repo names", folder="live") LiveRuns(lookback:timespan = 3d) {
+    let jobs = InFlightJobs(lookback)
+      | summarize live_jobs = count(), starved_jobs = countif(not(label_served)) by run_id;
+    InFlightRuns(lookback)
+    | lookup kind=leftouter (RepoNames() | project repository_id, org, repo) on repository_id
+    | extend repo = coalesce(repo, strcat("repo:", tostring(repository_id)))
+    | lookup kind=leftouter (jobs) on run_id
+    | extend live_jobs = coalesce(live_jobs, 0), starved_jobs = coalesce(starved_jobs, 0)
+    // A run with no in-flight jobs is not running: either every job finished and
+    // the run completion was dropped, or it died before dispatching anything.
+    | extend phantom = live_jobs == 0
+    | project org, repo, workflow, branch, trigger, started_at, age_seconds,
+              live_jobs, starved_jobs, phantom, run_id, attempt, repository_id
+    | order by age_seconds desc
+}

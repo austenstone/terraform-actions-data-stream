@@ -4,8 +4,8 @@
   "title": "GitHub Actions \u2014 Data Stream",
   "autoRefresh": {
     "enabled": true,
-    "defaultInterval": "5m",
-    "minInterval": "1m"
+    "defaultInterval": "1m",
+    "minInterval": "30s"
   },
   "baseQueries": [],
   "dataSources": [
@@ -31,7 +31,15 @@
         "unit": "days"
       },
       "showOnPages": {
-        "kind": "all"
+        "kind": "selection",
+        "pageIds": [
+          "4fbcd9ec-9fb9-5680-9226-42f8cc0da0f2",
+          "9af0980f-aed5-5eaf-9d28-ae33ad06c7c1",
+          "8232ede9-1c35-517b-bac9-63a61c479428",
+          "fdd2ec42-e574-5b9b-be46-e824cb5a43af",
+          "f86dc82b-2ec7-5374-9f0d-1831ef704d2f",
+          "c6114c8c-10ee-57ba-82e8-ce3c2ce077fa"
+        ]
       }
     },
     {
@@ -58,6 +66,140 @@
       },
       "showOnPages": {
         "kind": "all"
+      }
+    },
+    {
+      "id": "7cc7e1b1-5793-506d-8de1-67c24706844c",
+      "displayName": "Organization",
+      "description": "",
+      "kind": "string",
+      "variableName": "_org",
+      "selectionType": "scalar",
+      "includeAllOption": true,
+      "defaultValue": {
+        "kind": "all"
+      },
+      "dataSource": {
+        "kind": "query",
+        "queryRef": {
+          "kind": "query",
+          "queryId": "3341f15a-522f-5052-b5a0-45a10a8f4e51"
+        },
+        "columns": {
+          "value": "value",
+          "label": "label"
+        }
+      },
+      "showOnPages": {
+        "kind": "selection",
+        "pageIds": [
+          "c6114c8c-10ee-57ba-82e8-ce3c2ce077fa"
+        ]
+      }
+    },
+    {
+      "id": "6f9870bd-b63c-5c45-a492-15541375fcef",
+      "displayName": "Repository",
+      "description": "",
+      "kind": "string",
+      "variableName": "_repo",
+      "selectionType": "scalar",
+      "includeAllOption": true,
+      "defaultValue": {
+        "kind": "all"
+      },
+      "dataSource": {
+        "kind": "query",
+        "queryRef": {
+          "kind": "query",
+          "queryId": "cacb4254-bd98-5567-9264-17eb7e673015"
+        },
+        "columns": {
+          "value": "value",
+          "label": "label"
+        }
+      },
+      "showOnPages": {
+        "kind": "selection",
+        "pageIds": [
+          "c6114c8c-10ee-57ba-82e8-ce3c2ce077fa"
+        ]
+      }
+    },
+    {
+      "id": "6ba4b768-0cda-5557-b80b-a4f48323ac39",
+      "displayName": "Workflow name",
+      "description": "",
+      "kind": "string",
+      "variableName": "_wf",
+      "selectionType": "scalar",
+      "includeAllOption": true,
+      "defaultValue": {
+        "kind": "all"
+      },
+      "dataSource": {
+        "kind": "query",
+        "queryRef": {
+          "kind": "query",
+          "queryId": "a888c7e5-bfba-559b-a32a-ca4128abd085"
+        },
+        "columns": {
+          "value": "value",
+          "label": "label"
+        }
+      },
+      "showOnPages": {
+        "kind": "selection",
+        "pageIds": [
+          "c6114c8c-10ee-57ba-82e8-ce3c2ce077fa"
+        ]
+      }
+    },
+    {
+      "id": "36ad1a21-b73b-52a3-9f0a-7e9288ef7cfb",
+      "displayName": "Job",
+      "description": "",
+      "kind": "string",
+      "variableName": "_job",
+      "selectionType": "scalar",
+      "includeAllOption": true,
+      "defaultValue": {
+        "kind": "all"
+      },
+      "dataSource": {
+        "kind": "query",
+        "queryRef": {
+          "kind": "query",
+          "queryId": "62fbf43c-420a-53d2-bbb1-832fd95a1160"
+        },
+        "columns": {
+          "value": "value",
+          "label": "label"
+        }
+      },
+      "showOnPages": {
+        "kind": "selection",
+        "pageIds": [
+          "c6114c8c-10ee-57ba-82e8-ce3c2ce077fa"
+        ]
+      }
+    },
+    {
+      "id": "0cfd961a-ac13-5795-9421-4d60e2bf89fa",
+      "displayName": "Run id",
+      "description": "",
+      "kind": "string",
+      "variableName": "_run",
+      "selectionType": "freetext",
+      "defaultValue": {
+        "kind": "value",
+        "value": ""
+      },
+      "showOnPages": {
+        "kind": "selection",
+        "pageIds": [
+          "c6114c8c-10ee-57ba-82e8-ce3c2ce077fa"
+        ]
       }
     }
   ],
@@ -258,54 +400,6 @@
         "kind": "inline",
         "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
       },
-      "text": "let _ev = materialize(ActionsEvents\n| where eventTimestamp between (_startTime .. _endTime)\n// \"Test connection\" writes a real row here as an undocumented `test_connection`\n// event whose eventData is just {\"is_new_sink\": true}. Excluded so debugging a\n// sink doesn't show up as traffic. https://github.com/austenstone/terraform-actions-data-stream/issues/15\n| where eventType != \"test_connection\");\n// count()-minus-dcount() is NOT a duplicate detector: dcount is HyperLogLog and\n// was off by 51 on 21,915 rows even at accuracy 4. Count the collisions instead.\nlet _dupes = toscalar(_ev | summarize c = count() by eventUuid | summarize countif(c > 1));\nlet _dropped = toscalar(StuckRuns()\n    | where created_at between (_startTime .. _endTime)\n    | summarize countif(likely_dropped));\nlet _skipped = toscalar(JobFacts()\n    | where queued_at between (_startTime .. _endTime)\n    | summarize round(100.0 * countif(not(ran)) / count(), 1));\n_ev\n| extend lag_s = todouble(datetime_diff(\"millisecond\", ingestion_time(), eventTimestamp)) / 1000.0\n| summarize events = count(),\n            p95 = round(percentile(iff(lag_s >= 0, lag_s, real(null)), 95), 1)\n| extend Rows = pack_array(\n    pack_array(\"Events ingested\", tostring(events)),\n    pack_array(\"Ingest lag p95\", strcat(tostring(p95), \" s\")),\n    pack_array(\"Duplicate events\", tostring(_dupes)),\n    pack_array(\"Dropped completions\", tostring(_dropped)),\n    pack_array(\"Jobs skipped\", strcat(tostring(_skipped), \" %\")))\n| mv-expand Rows\n| project title = tostring(Rows[0]), value = tostring(Rows[1])",
-      "id": "bb46560e-0632-50c2-a7c9-614a055a2550",
-      "usedVariables": [
-        "_endTime",
-        "_startTime"
-      ]
-    },
-    {
-      "dataSource": {
-        "kind": "inline",
-        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
-      },
-      "text": "let _ev = materialize(ActionsEvents\n| where eventTimestamp between (_startTime .. _endTime)\n// \"Test connection\" writes a real row here as an undocumented `test_connection`\n// event whose eventData is just {\"is_new_sink\": true}. Excluded so debugging a\n// sink doesn't show up as traffic. https://github.com/austenstone/terraform-actions-data-stream/issues/15\n| where eventType != \"test_connection\");\n_ev\n| extend lag_s = todouble(datetime_diff(\"millisecond\", ingestion_time(), eventTimestamp)) / 1000.0\n| where lag_s >= 0\n| summarize p50 = round(percentile(lag_s, 50), 2),\n            p95 = round(percentile(lag_s, 95), 2),\n            p99 = round(percentile(lag_s, 99), 2)\n    by timestamp = bin(eventTimestamp, 10m)\n| order by timestamp asc",
-      "id": "9d61f32d-e7aa-5d1d-824a-d5228375a2a6",
-      "usedVariables": [
-        "_endTime",
-        "_startTime"
-      ]
-    },
-    {
-      "dataSource": {
-        "kind": "inline",
-        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
-      },
-      "text": "let _ev = materialize(ActionsEvents\n| where eventTimestamp between (_startTime .. _endTime)\n// \"Test connection\" writes a real row here as an undocumented `test_connection`\n// event whose eventData is just {\"is_new_sink\": true}. Excluded so debugging a\n// sink doesn't show up as traffic. https://github.com/austenstone/terraform-actions-data-stream/issues/15\n| where eventType != \"test_connection\");\n// Every created event should eventually be matched by a completed one. Runs that\n// dispatch no job never emit a completion at all -- see issue #8. A small negative\n// on Jobs is a window-boundary artifact, not a leak.\n_ev\n| summarize c = count() by eventType\n| extend entity = iff(eventType startswith \"workflow_run\", \"Runs\", \"Jobs\"),\n         phase = extract(@\"_(created|completed)$\", 1, eventType)\n| summarize opened = sumif(c, phase == \"created\"), closed = sumif(c, phase == \"completed\") by entity\n| extend never_closed = opened - closed,\n         leak_pct = round(100.0 * (opened - closed) / opened, 2)\n| order by entity asc",
-      "id": "1a8714e5-2059-597a-8981-72c7ab1975a2",
-      "usedVariables": [
-        "_endTime",
-        "_startTime"
-      ]
-    },
-    {
-      "dataSource": {
-        "kind": "inline",
-        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
-      },
-      "text": "StuckRuns()\n| where created_at between (_startTime .. _endTime)\n| where likely_dropped\n| project run_id, created_at, open_for = format_timespan(age, \"d.hh:mm\"), has_jobs\n| order by created_at desc",
-      "id": "0d2c6bcf-f41b-5a00-aa59-e5b789d16aa4",
-      "usedVariables": [
-        "_endTime",
-        "_startTime"
-      ]
-    },
-    {
-      "dataSource": {
-        "kind": "inline",
-        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
-      },
       "text": "let f = StepFacts()\n| where started_at between (_startTime .. _endTime)\n| where isnull(_workflow) or array_length(_workflow) == 0 or workflow_name in (_workflow);\nf\n| summarize steps = count(), jobs = dcount(check_run_id), runs = dcount(run_id),\n            names = dcount(step_name), ran = countif(ran)\n| extend Rows = pack_array(\n    pack_array(\"Steps\", tostring(steps)),\n    pack_array(\"Jobs covered\", tostring(jobs)),\n    pack_array(\"Runs covered\", tostring(runs)),\n    pack_array(\"Distinct step names\", tostring(names)),\n    pack_array(\"Steps that executed\", strcat(tostring(round(100.0 * ran / steps, 1)), \"%\")))\n| mv-expand Rows\n| project title = tostring(Rows[0]), value = tostring(Rows[1])",
       "id": "b15e3f08-50ab-56ab-a61e-a979cb7a1582",
       "usedVariables": [
@@ -365,6 +459,286 @@
         "_startTime",
         "_workflow"
       ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "let _ev = materialize(ActionsEvents\n| where eventTimestamp between (_startTime .. _endTime)\n// \"Test connection\" writes a real row here as an undocumented `test_connection`\n// event whose eventData is just {\"is_new_sink\": true}. Excluded so debugging a\n// sink doesn't show up as traffic. https://github.com/austenstone/terraform-actions-data-stream/issues/15\n| where eventType != \"test_connection\");\n// count()-minus-dcount() is NOT a duplicate detector: dcount is HyperLogLog and\n// was off by 51 on 21,915 rows even at accuracy 4. Count the collisions instead.\nlet _dupes = toscalar(_ev | summarize c = count() by eventUuid | summarize countif(c > 1));\nlet _dropped = toscalar(StuckRuns()\n    | where created_at between (_startTime .. _endTime)\n    | summarize countif(likely_dropped));\nlet _skipped = toscalar(JobFacts()\n    | where queued_at between (_startTime .. _endTime)\n    | summarize round(100.0 * countif(not(ran)) / count(), 1));\n_ev\n| extend lag_s = todouble(datetime_diff(\"millisecond\", ingestion_time(), eventTimestamp)) / 1000.0\n| summarize events = count(),\n            p95 = round(percentile(iff(lag_s >= 0, lag_s, real(null)), 95), 1)\n| extend Rows = pack_array(\n    pack_array(\"Events ingested\", tostring(events)),\n    pack_array(\"Ingest lag p95\", strcat(tostring(p95), \" s\")),\n    pack_array(\"Duplicate events\", tostring(_dupes)),\n    pack_array(\"Dropped completions\", tostring(_dropped)),\n    pack_array(\"Jobs skipped\", strcat(tostring(_skipped), \" %\")))\n| mv-expand Rows\n| project title = tostring(Rows[0]), value = tostring(Rows[1])",
+      "id": "bb46560e-0632-50c2-a7c9-614a055a2550",
+      "usedVariables": [
+        "_endTime",
+        "_startTime"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "let _ev = materialize(ActionsEvents\n| where eventTimestamp between (_startTime .. _endTime)\n// \"Test connection\" writes a real row here as an undocumented `test_connection`\n// event whose eventData is just {\"is_new_sink\": true}. Excluded so debugging a\n// sink doesn't show up as traffic. https://github.com/austenstone/terraform-actions-data-stream/issues/15\n| where eventType != \"test_connection\");\n_ev\n| extend lag_s = todouble(datetime_diff(\"millisecond\", ingestion_time(), eventTimestamp)) / 1000.0\n| where lag_s >= 0\n| summarize p50 = round(percentile(lag_s, 50), 2),\n            p95 = round(percentile(lag_s, 95), 2),\n            p99 = round(percentile(lag_s, 99), 2)\n    by timestamp = bin(eventTimestamp, 10m)\n| order by timestamp asc",
+      "id": "9d61f32d-e7aa-5d1d-824a-d5228375a2a6",
+      "usedVariables": [
+        "_endTime",
+        "_startTime"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "let _ev = materialize(ActionsEvents\n| where eventTimestamp between (_startTime .. _endTime)\n// \"Test connection\" writes a real row here as an undocumented `test_connection`\n// event whose eventData is just {\"is_new_sink\": true}. Excluded so debugging a\n// sink doesn't show up as traffic. https://github.com/austenstone/terraform-actions-data-stream/issues/15\n| where eventType != \"test_connection\");\n// Every created event should eventually be matched by a completed one. Runs that\n// dispatch no job never emit a completion at all -- see issue #8. A small negative\n// on Jobs is a window-boundary artifact, not a leak.\n_ev\n| summarize c = count() by eventType\n| extend entity = iff(eventType startswith \"workflow_run\", \"Runs\", \"Jobs\"),\n         phase = extract(@\"_(created|completed)$\", 1, eventType)\n| summarize opened = sumif(c, phase == \"created\"), closed = sumif(c, phase == \"completed\") by entity\n| extend never_closed = opened - closed,\n         leak_pct = round(100.0 * (opened - closed) / opened, 2)\n| order by entity asc",
+      "id": "1a8714e5-2059-597a-8981-72c7ab1975a2",
+      "usedVariables": [
+        "_endTime",
+        "_startTime"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "StuckRuns()\n| where created_at between (_startTime .. _endTime)\n| where likely_dropped\n| project run_id, created_at, open_for = format_timespan(age, \"d.hh:mm\"), has_jobs\n| order by created_at desc",
+      "id": "0d2c6bcf-f41b-5a00-aa59-e5b789d16aa4",
+      "usedVariables": [
+        "_endTime",
+        "_startTime"
+      ]
+    },
+    {
+      "id": "3341f15a-522f-5052-b5a0-45a10a8f4e51",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "Repos\n| where resolved\n| summarize by owner\n| where isnotempty(owner)\n| project value = owner, label = owner\n| order by label asc",
+      "usedVariables": []
+    },
+    {
+      "id": "cacb4254-bd98-5567-9264-17eb7e673015",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "Repos\n| where resolved\n| where isempty(_org) or owner == _org\n| summarize by full_name\n| project value = full_name, label = full_name\n| order by label asc\n| take 2000",
+      "usedVariables": [
+        "_org"
+      ]
+    },
+    {
+      "id": "a888c7e5-bfba-559b-a32a-ca4128abd085",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "HierarchyJobs()\n| where timestamp between (_startTime .. _endTime)\n| where isempty(_org) or org == _org\n| where isempty(_repo) or repo == _repo\n| summarize by workflow\n| project value = workflow, label = workflow\n| order by label asc\n| take 2000",
+      "usedVariables": [
+        "_startTime",
+        "_endTime",
+        "_org",
+        "_repo"
+      ]
+    },
+    {
+      "id": "62fbf43c-420a-53d2-bbb1-832fd95a1160",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "HierarchyJobs()\n| where timestamp between (_startTime .. _endTime)\n| where isempty(_org) or org == _org\n| where isempty(_repo) or repo == _repo\n| where isempty(_wf) or workflow == _wf\n| summarize by job_name\n| project value = job_name, label = job_name\n| order by label asc\n| take 2000",
+      "usedVariables": [
+        "_startTime",
+        "_endTime",
+        "_org",
+        "_repo",
+        "_wf"
+      ]
+    },
+    {
+      "id": "0716cfb2-d126-5157-857e-aeda4105df61",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "let _sel = HierarchyJobs()\n| where timestamp between (_startTime .. _endTime)\n| where isempty(_org) or org == _org\n| where isempty(_repo) or repo == _repo\n| where isempty(_wf) or workflow == _wf\n| where isempty(_job) or job_name == _job;\nlet _n = toscalar(_sel | summarize count());\nlet _hrs = toscalar(_sel | where not(stranded) | summarize round(sum(exec_seconds) / 3600.0, 1));\nprint n = _n, hrs = _hrs\n| extend Rows = pack_array(\n    pack_array(\"Organization\", iff(isempty(_org), \"all\", _org)),\n    pack_array(\"Repository\", iff(isempty(_repo), \"all\", _repo)),\n    pack_array(\"Workflow\", iff(isempty(_wf), \"all\", _wf)),\n    pack_array(\"Job\", iff(isempty(_job), \"all\", _job)),\n    pack_array(\"Jobs in scope\", tostring(n)),\n    pack_array(\"Compute hours\", tostring(hrs)))\n| mv-expand Rows\n| project title = tostring(Rows[0]), value = tostring(Rows[1])",
+      "usedVariables": [
+        "_startTime",
+        "_endTime",
+        "_org",
+        "_repo",
+        "_wf",
+        "_job"
+      ]
+    },
+    {
+      "id": "9edea0f1-5bea-5fa3-a277-369f2a152a39",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "let _h = HierarchyJobs()\n| where timestamp between (_startTime .. _endTime)\n| where isempty(_org) or org == _org\n| where isempty(_repo) or repo == _repo\n| where isempty(_wf) or workflow == _wf\n| where isempty(_job) or job_name == _job;\nlet _s = HierarchySteps()\n| where timestamp between (_startTime .. _endTime)\n| where isempty(_org) or org == _org\n| where isempty(_repo) or repo == _repo\n| where isempty(_wf) or workflow == _wf\n| where isempty(_job) or job_name == _job;\nunion\n  (_h | summarize level = \"organizations\", depth = 1, count_ = dcountif(org, org != \"unresolved\", 4)),\n  (_h | summarize level = \"repositories\", depth = 2, count_ = dcount(repo, 4)),\n  (_h | summarize level = \"workflows\", depth = 3, count_ = dcount(strcat(repo, \"/\", workflow), 4)),\n  (_h | summarize level = \"jobs\", depth = 4, count_ = dcount(strcat(repo, \"/\", workflow, \"/\", job_name), 4)),\n  (_s | summarize level = \"steps\", depth = 5, count_ = dcount(strcat(job_name, \"/\", step_name), 4))\n| order by depth asc\n| project level, distinct_names = count_",
+      "usedVariables": [
+        "_startTime",
+        "_endTime",
+        "_org",
+        "_repo",
+        "_wf",
+        "_job"
+      ]
+    },
+    {
+      "id": "658c7053-75dc-5dda-8c7e-fa5ed6fcb349",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "HierarchyJobs()\n| where timestamp between (_startTime .. _endTime)\n| where isempty(_org) or org == _org\n| where isempty(_repo) or repo == _repo\n| where isempty(_wf) or workflow == _wf\n| summarize workflows = dcount(workflow, 4), jobs = count(),\n            hours = round(sumif(exec_seconds, not(stranded)) / 3600.0, 2),\n            failures = countif(conclusion == \"failure\"),\n            ran = countif(ran)\n  by org, repo\n| extend failure_pct = round(100.0 * failures / iff(ran == 0, 1, ran), 1)\n| project org, repo, workflows, jobs, hours, failure_pct\n| order by hours desc\n| take 200",
+      "usedVariables": [
+        "_startTime",
+        "_endTime",
+        "_org",
+        "_repo",
+        "_wf"
+      ]
+    },
+    {
+      "id": "f67e62a6-ae72-5892-aaa4-ecbf79411d4a",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "WorkflowSummary()\n| where isempty(_org) or org == _org\n| where isempty(_repo) or repo == _repo\n| where isempty(_wf) or workflow == _wf\n| project org, repo, workflow, runs, jobs, p50, p95, queue_p95,\n          failure_pct, exec_hours, exec_share_pct\n| order by exec_hours desc\n| take 200",
+      "usedVariables": [
+        "_org",
+        "_repo",
+        "_wf"
+      ]
+    },
+    {
+      "id": "0c409111-712c-59e8-ac5a-77d076e83563",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "JobSummary()\n| where isempty(_org) or org == _org\n| where isempty(_repo) or repo == _repo\n| where isempty(_wf) or workflow == _wf\n| where isempty(_job) or job_name == _job\n| project repo, workflow, job_name, runner, runs, p50, p95, max_seconds,\n          queue_p95, failure_pct, exec_hours\n| order by exec_hours desc\n| take 200",
+      "usedVariables": [
+        "_org",
+        "_repo",
+        "_wf",
+        "_job"
+      ]
+    },
+    {
+      "id": "88a2c0ae-4721-58f8-8891-cd31ddac889a",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "HierarchySteps()\n| where timestamp between (_startTime .. _endTime)\n| where isempty(_org) or org == _org\n| where isempty(_repo) or repo == _repo\n| where isempty(_wf) or workflow == _wf\n| where isempty(_job) or job_name == _job\n| where ran\n| summarize occurrences = count(),\n            p50 = round(percentile(duration_seconds, 50), 1),\n            p95 = round(percentile(duration_seconds, 95), 1),\n            minutes = round(sum(duration_seconds) / 60.0, 1),\n            failures = countif(step_conclusion == \"failure\")\n  by workflow, job_name, step_name\n| extend failure_pct = round(100.0 * failures / occurrences, 1)\n| project workflow, job_name, step_name, occurrences, p50, p95, minutes, failure_pct\n| order by minutes desc\n| take 200",
+      "usedVariables": [
+        "_startTime",
+        "_endTime",
+        "_org",
+        "_repo",
+        "_wf",
+        "_job"
+      ]
+    },
+    {
+      "id": "8878a752-d017-5384-8d87-fe2a8ba767c5",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "HierarchyJobs()\n| where timestamp between (_startTime .. _endTime)\n| where isempty(_org) or org == _org\n| where isempty(_repo) or repo == _repo\n| where isempty(_wf) or workflow == _wf\n| where isempty(_job) or job_name == _job\n| summarize jobs = count(), started = min(started_at),\n            wall_seconds = round(max(run_wall_seconds), 1),\n            result = any(run_conclusion), workflow = any(workflow),\n            repo = any(repo), failed_jobs = countif(conclusion == \"failure\")\n  by run_id\n| project started, repo, workflow, run_id, jobs, failed_jobs, result, wall_seconds\n| order by started desc\n| take 200",
+      "usedVariables": [
+        "_startTime",
+        "_endTime",
+        "_org",
+        "_repo",
+        "_wf",
+        "_job"
+      ]
+    },
+    {
+      "id": "bfe5057d-8f8d-552d-a3d7-2feda52907db",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "// Kusto dashboards have no gantt or flame visual, so the span bars are drawn\n// with characters and rendered in a table. Falls back to a run in the current\n// selection so the tile is never blank on first load.\nlet _scoped = HierarchyJobs()\n| where timestamp between (_startTime .. _endTime)\n| where isempty(_org) or org == _org\n| where isempty(_repo) or repo == _repo\n| where isempty(_wf) or workflow == _wf\n| where isempty(_job) or job_name == _job\n// Stranded jobs are excluded or the fallback always lands on a 24h timeout,\n// whose trace is one flat bar and tells you nothing.\n| where not(stranded) and isnotnull(run_wall_seconds);\n// Prefer a run whose steps were ingested, so the default trace shows all three\n// levels rather than a bare run > job pair.\nlet _rich = toscalar(_scoped\n    | join kind=leftsemi (HierarchySteps() | distinct run_id) on run_id\n    | summarize arg_max(run_wall_seconds, run_id)\n    | project run_id);\nlet _any = toscalar(_scoped | summarize arg_max(run_wall_seconds, run_id) | project run_id);\nlet _target = case(isnotempty(_run), tolong(_run), isnotnull(_rich), _rich, _any);\nRunTimeline(_target)",
+      "usedVariables": [
+        "_startTime",
+        "_endTime",
+        "_org",
+        "_repo",
+        "_wf",
+        "_job",
+        "_run"
+      ]
+    },
+    {
+      "id": "b974933a-18e0-5127-aa42-654b4863f147",
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "// Jobs that asked for a label nothing serves. They never got a runner, so the\n// stream reports their queue wait as execution time and they sit until the 24h\n// timeout cancels them. Excluded from the statistics above, listed here because\n// each one is a workflow still pinning a dead runner label.\nStrandedJobs()\n| where timestamp between (_startTime .. _endTime)\n| where isempty(_org) or org == _org\n| where isempty(_repo) or repo == _repo\n| where isempty(_wf) or workflow == _wf\n| project timestamp, repo, workflow, job_name, label, conclusion, waited_hours, run_id\n| order by waited_hours desc\n| take 100",
+      "usedVariables": [
+        "_startTime",
+        "_endTime",
+        "_org",
+        "_repo",
+        "_wf"
+      ]
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "let _j = materialize(LiveJobs());\nlet _live_runs = toscalar(LiveRuns() | where not(phantom) | count);\n_j\n| summarize jobs = count(),\n            starved = countif(not(label_served)),\n            repos = dcount(repo, 4),\n            age_seconds = max(age_seconds)\n| extend age_seconds = coalesce(age_seconds, 0)\n| extend longest = case(age_seconds < 90, strcat(tostring(age_seconds), \"s\"),\n              age_seconds < 5400, strcat(tostring(round(age_seconds / 60.0, 1)), \"m\"),\n              strcat(tostring(round(age_seconds / 3600.0, 1)), \"h\"))\n| extend Rows = pack_array(\n    pack_array(\"Jobs in flight\", tostring(jobs)),\n    pack_array(\"Starved\", tostring(starved)),\n    pack_array(\"Runs in flight\", tostring(_live_runs)),\n    pack_array(\"Repos active\", tostring(repos)),\n    pack_array(\"Longest wait\", iff(jobs == 0, \"--\", longest)))\n| mv-expand Rows\n| project title = tostring(Rows[0]), value = tostring(Rows[1])",
+      "id": "b10366be-08bc-5353-a343-4d2f0b2dca01",
+      "usedVariables": []
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "ActionsEvents\n| where eventTimestamp > ago(2h)\n| where eventType in (\"workflow_job_created\", \"workflow_job_completed\")\n| summarize queued = countif(eventType == \"workflow_job_created\"),\n            completed = countif(eventType == \"workflow_job_completed\")\n  by timestamp = bin(eventTimestamp, 1m)\n| order by timestamp asc",
+      "id": "195ae661-0b25-5624-a176-32ad10285c2f",
+      "usedVariables": []
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "LiveJobs()\n| extend waiting = case(age_seconds < 90, strcat(tostring(age_seconds), \"s\"),\n              age_seconds < 5400, strcat(tostring(round(age_seconds / 60.0, 1)), \"m\"),\n              strcat(tostring(round(age_seconds / 3600.0, 1)), \"h\"))\n// Not \"queued vs running\" -- the stream cannot distinguish those. The only\n// honest split is whether anything with these labels has finished on a real\n// runner in the last 24h.\n| extend state = iff(label_served, \"in flight\", \"STARVED: no runner serves these labels\")\n| project repo, workflow, job = job_name, labels, state, waiting, age_seconds,\n          branch, trigger, run_id\n| order by age_seconds desc",
+      "id": "033ac225-fdaa-56a2-a2f4-bcc782ef7673",
+      "usedVariables": []
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "LiveJobs()\n| summarize waiting = count(),\n            repos = dcount(repo, 4),\n            oldest_seconds = max(age_seconds),\n            served = take_any(label_served)\n  by labels\n| extend verdict = iff(served,\n        \"pool is answering\",\n        \"NO RUNNER: nothing with these labels has completed in 24h\")\n| project labels, waiting, repos, oldest_seconds, verdict\n| order by oldest_seconds desc",
+      "id": "17a3c5b7-a2ba-5459-aeed-5f1da3d5e272",
+      "usedVariables": []
+    },
+    {
+      "dataSource": {
+        "kind": "inline",
+        "dataSourceId": "aa000000-0000-0000-0000-0000000000d5"
+      },
+      "text": "LiveRuns()\n| where not(phantom)\n| extend waiting = case(age_seconds < 90, strcat(tostring(age_seconds), \"s\"),\n              age_seconds < 5400, strcat(tostring(round(age_seconds / 60.0, 1)), \"m\"),\n              strcat(tostring(round(age_seconds / 3600.0, 1)), \"h\"))\n| project repo, workflow, branch, trigger, live_jobs, starved_jobs,\n          waiting, age_seconds, started_at, run_id\n| order by age_seconds desc",
+      "id": "16718de4-acc6-5015-b306-d568a017ced8",
+      "usedVariables": []
     }
   ],
   "tiles": [
@@ -377,7 +751,7 @@
         "x": 0,
         "y": 0,
         "width": 24,
-        "height": 6
+        "height": 9
       },
       "visualOptions": {
         "colorRulesDisabled": false,
@@ -409,7 +783,7 @@
       "pageId": "4fbcd9ec-9fb9-5680-9226-42f8cc0da0f2",
       "layout": {
         "x": 0,
-        "y": 6,
+        "y": 9,
         "width": 12,
         "height": 8
       },
@@ -466,7 +840,7 @@
       "pageId": "4fbcd9ec-9fb9-5680-9226-42f8cc0da0f2",
       "layout": {
         "x": 12,
-        "y": 6,
+        "y": 9,
         "width": 12,
         "height": 8
       },
@@ -521,7 +895,7 @@
       "pageId": "4fbcd9ec-9fb9-5680-9226-42f8cc0da0f2",
       "layout": {
         "x": 0,
-        "y": 14,
+        "y": 17,
         "width": 12,
         "height": 8
       },
@@ -548,7 +922,7 @@
       "pageId": "4fbcd9ec-9fb9-5680-9226-42f8cc0da0f2",
       "layout": {
         "x": 12,
-        "y": 14,
+        "y": 17,
         "width": 12,
         "height": 8
       },
@@ -905,12 +1279,197 @@
       "pageId": "4fbcd9ec-9fb9-5680-9226-42f8cc0da0f2",
       "layout": {
         "x": 0,
-        "y": 22,
+        "y": 25,
         "width": 24,
         "height": 6
       },
       "visualOptions": {},
       "markdownText": "Sourced from the **GitHub Actions Data Stream** (preview). Every tile honours the time range and workflow filters above.\n\n- **Skipped jobs are excluded from timings.** They arrive with all-zero durations and are ~40% of rows, so leaving them in drags every average toward zero.\n- **Negative queue times are dropped, not clamped.** `workflow_job_created` sometimes lands after the job started. Clamping to zero would hide the bias; dropping keeps the p50 honest.\n- **These are not billable minutes.** The stream carries no cost fields. Durations are wall clock, and self-hosted time is free.\n- **Names come from the stream, IDs do not resolve.** Repositories and actors are numeric ids only; join the REST API if you need `owner/repo`."
+    },
+    {
+      "id": "eacac9b1-889d-5062-83f3-52b3908ba006",
+      "title": "Step coverage \u2014 selected range",
+      "visualType": "multistat",
+      "pageId": "fdd2ec42-e574-5b9b-be46-e824cb5a43af",
+      "layout": {
+        "x": 0,
+        "y": 0,
+        "width": 24,
+        "height": 9
+      },
+      "visualOptions": {
+        "colorRulesDisabled": false,
+        "colorRules": [],
+        "colorStyle": "light",
+        "multiStat__valueColumn": "value",
+        "multiStat__labelColumn": "title",
+        "multiStat__displayOrientation": "horizontal",
+        "multiStat__textSize": "auto",
+        "multiStat__slot": {
+          "width": 5,
+          "height": 1
+        },
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "b15e3f08-50ab-56ab-a61e-a979cb7a1582"
+      },
+      "description": "Real steps from the job API, not log groups"
+    },
+    {
+      "id": "6eb6b9a8-032a-5265-842b-2cb16297dbc1",
+      "title": "Where the time actually goes",
+      "visualType": "table",
+      "pageId": "fdd2ec42-e574-5b9b-be46-e824cb5a43af",
+      "layout": {
+        "x": 0,
+        "y": 9,
+        "width": 12,
+        "height": 9
+      },
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "colorRules": [],
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "24ec6af7-fac5-56d5-9951-303cbfe67d03"
+      },
+      "description": "Authored steps only, ranked by total wall time"
+    },
+    {
+      "id": "dfb59593-9fbf-599c-be55-98c46f4de4ea",
+      "title": "Runner overhead per job",
+      "visualType": "table",
+      "pageId": "fdd2ec42-e574-5b9b-be46-e824cb5a43af",
+      "layout": {
+        "x": 12,
+        "y": 9,
+        "width": 12,
+        "height": 9
+      },
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "colorRules": [],
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "b41c0e14-eb1a-5485-ad48-740dffced427"
+      },
+      "description": "Setup + teardown as a share of job wall time"
+    },
+    {
+      "id": "ca37f4c1-ef40-518f-bcb3-654819fb6676",
+      "title": "Step failure hotspots",
+      "visualType": "table",
+      "pageId": "fdd2ec42-e574-5b9b-be46-e824cb5a43af",
+      "layout": {
+        "x": 0,
+        "y": 18,
+        "width": 12,
+        "height": 9
+      },
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "colorRules": [],
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "dbf1d64b-2d75-55e5-9983-4ee731ef3faf"
+      },
+      "description": "Ranked by hours burned on work that failed"
+    },
+    {
+      "id": "28af4136-3d85-5897-9bdb-dce55e5f9861",
+      "title": "Slowest single step executions",
+      "visualType": "stackedcolumn",
+      "pageId": "fdd2ec42-e574-5b9b-be46-e824cb5a43af",
+      "layout": {
+        "x": 12,
+        "y": 18,
+        "width": 12,
+        "height": 9
+      },
+      "visualOptions": {
+        "xColumn": "step",
+        "yColumns": [
+          "minutes"
+        ],
+        "seriesColumns": null,
+        "hideLegend": true,
+        "legendLocation": "bottom",
+        "xColumnTitle": "",
+        "xAxisScale": "linear",
+        "yAxisScale": "linear",
+        "multipleYAxes": {
+          "base": {
+            "id": "-1",
+            "columns": [],
+            "label": "",
+            "yAxisMaximumValue": null,
+            "yAxisMinimumValue": null,
+            "yAxisScale": "linear",
+            "horizontalLines": []
+          },
+          "additional": [],
+          "showMultiplePanels": false
+        },
+        "verticalLine": "",
+        "selectedDataOnLoad": {
+          "all": false,
+          "limit": 10
+        },
+        "dataPointsTooltip": {
+          "all": false,
+          "limit": 10
+        },
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "9b343b27-2aa4-5882-9ef8-add4f3dd1381"
+      },
+      "description": "The tail, not the average"
+    },
+    {
+      "id": "f3c6abab-e031-515e-bcc4-32718b4621b5",
+      "title": "How to read this",
+      "visualType": "markdownCard",
+      "pageId": "fdd2ec42-e574-5b9b-be46-e824cb5a43af",
+      "layout": {
+        "x": 0,
+        "y": 27,
+        "width": 24,
+        "height": 6
+      },
+      "visualOptions": {},
+      "description": "",
+      "markdownText": "These are **real steps**, resolved from the REST job API using `check_run_id` from the data stream. They are not `##[group]` markers scraped from logs \u2014 those matched real step names only 58% of the time, because one step can emit many groups and many steps emit none.\n\n- **Synthetic steps are excluded from the time sinks.** `Set up job`, `Post *` and `Complete job` are runner overhead, not your CI. They get their own tile instead of drowning out authored work.\n- **Skipped and cancelled jobs are absent by design.** They return `steps: []` from the API because they never executed. They were 43% of all job events.\n- **Spread is p95 \u00f7 p50.** A high spread is a cache-miss story: the median run is fine and the tail is not. That is usually more actionable than a slow median.\n- **A 100% failure rate is often `continue-on-error`.** Polling and label-check steps show up here legitimately. Read the failure count alongside the wasted hours."
     },
     {
       "id": "6e12fd59-a3a4-5989-b1ae-834828463d5e",
@@ -922,7 +1481,7 @@
         "x": 0,
         "y": 0,
         "width": 24,
-        "height": 6
+        "height": 9
       },
       "visualOptions": {
         "multiStat__valueColumn": "value",
@@ -950,7 +1509,7 @@
       "pageId": "f86dc82b-2ec7-5374-9f0d-1831ef704d2f",
       "layout": {
         "x": 0,
-        "y": 6,
+        "y": 9,
         "width": 12,
         "height": 7
       },
@@ -1006,7 +1565,7 @@
       "pageId": "f86dc82b-2ec7-5374-9f0d-1831ef704d2f",
       "layout": {
         "x": 12,
-        "y": 6,
+        "y": 9,
         "width": 12,
         "height": 7
       },
@@ -1033,7 +1592,7 @@
       "pageId": "f86dc82b-2ec7-5374-9f0d-1831ef704d2f",
       "layout": {
         "x": 0,
-        "y": 13,
+        "y": 16,
         "width": 24,
         "height": 8
       },
@@ -1059,7 +1618,7 @@
       "pageId": "f86dc82b-2ec7-5374-9f0d-1831ef704d2f",
       "layout": {
         "x": 0,
-        "y": 21,
+        "y": 24,
         "width": 24,
         "height": 9
       },
@@ -1067,142 +1626,355 @@
       "visualOptions": {}
     },
     {
-      "id": "eacac9b1-889d-5062-83f3-52b3908ba006",
-      "title": "Step coverage \u2014 selected range",
+      "id": "97eb0a83-d7c5-51dc-a56d-6fe4fb44cfb0",
+      "title": "Current selection",
+      "description": "Click any row below to drill in; use the dropdowns to jump",
       "visualType": "multistat",
-      "pageId": "fdd2ec42-e574-5b9b-be46-e824cb5a43af",
+      "pageId": "c6114c8c-10ee-57ba-82e8-ce3c2ce077fa",
       "layout": {
         "x": 0,
         "y": 0,
+        "width": 12,
+        "height": 9
+      },
+      "visualOptions": {
+        "multiStat__valueColumn": "value",
+        "multiStat__labelColumn": "title",
+        "multiStat__displayOrientation": "horizontal",
+        "multiStat__slot": {
+          "width": 2,
+          "height": 3
+        },
+        "multiStat__textSize": "auto",
+        "colorRules": [],
+        "colorRulesDisabled": false,
+        "colorStyle": "light"
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "0716cfb2-d126-5157-857e-aeda4105df61"
+      }
+    },
+    {
+      "id": "86f173f4-fbe2-5bc5-837d-00a57fb87ae3",
+      "title": "Tree below this selection",
+      "description": "Distinct names at each level",
+      "visualType": "table",
+      "pageId": "c6114c8c-10ee-57ba-82e8-ce3c2ce077fa",
+      "layout": {
+        "x": 12,
+        "y": 0,
+        "width": 12,
+        "height": 9
+      },
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "colorRules": [],
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "9edea0f1-5bea-5fa3-a277-369f2a152a39"
+      }
+    },
+    {
+      "id": "3cc91cfa-5505-5a74-8f56-c988a144b98e",
+      "title": "Repositories",
+      "description": "Click a row to filter everything below",
+      "visualType": "table",
+      "pageId": "c6114c8c-10ee-57ba-82e8-ce3c2ce077fa",
+      "layout": {
+        "x": 0,
+        "y": 9,
+        "width": 12,
+        "height": 8
+      },
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "colorRules": [],
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [
+          {
+            "interaction": "column",
+            "property": "org",
+            "parameterId": "7cc7e1b1-5793-506d-8de1-67c24706844c",
+            "disabled": false
+          },
+          {
+            "interaction": "column",
+            "property": "repo",
+            "parameterId": "6f9870bd-b63c-5c45-a492-15541375fcef",
+            "disabled": false
+          }
+        ],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "658c7053-75dc-5dda-8c7e-fa5ed6fcb349"
+      }
+    },
+    {
+      "id": "89c94caf-a8f2-5315-b078-9b4899a67d3e",
+      "title": "Workflows",
+      "description": "Duration percentiles and share of compute",
+      "visualType": "table",
+      "pageId": "c6114c8c-10ee-57ba-82e8-ce3c2ce077fa",
+      "layout": {
+        "x": 12,
+        "y": 9,
+        "width": 12,
+        "height": 8
+      },
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "colorRules": [],
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [
+          {
+            "interaction": "column",
+            "property": "repo",
+            "parameterId": "6f9870bd-b63c-5c45-a492-15541375fcef",
+            "disabled": false
+          },
+          {
+            "interaction": "column",
+            "property": "workflow",
+            "parameterId": "6ba4b768-0cda-5557-b80b-a4f48323ac39",
+            "disabled": false
+          }
+        ],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "f67e62a6-ae72-5892-aaa4-ecbf79411d4a"
+      }
+    },
+    {
+      "id": "7ac21a4a-d002-5742-a36b-682fa3ce1cb2",
+      "title": "Jobs",
+      "description": "The level the stream actually emits",
+      "visualType": "table",
+      "pageId": "c6114c8c-10ee-57ba-82e8-ce3c2ce077fa",
+      "layout": {
+        "x": 0,
+        "y": 17,
+        "width": 12,
+        "height": 8
+      },
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "colorRules": [],
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [
+          {
+            "interaction": "column",
+            "property": "workflow",
+            "parameterId": "6ba4b768-0cda-5557-b80b-a4f48323ac39",
+            "disabled": false
+          },
+          {
+            "interaction": "column",
+            "property": "job_name",
+            "parameterId": "36ad1a21-b73b-52a3-9f0a-7e9288ef7cfb",
+            "disabled": false
+          }
+        ],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "0c409111-712c-59e8-ac5a-77d076e83563"
+      }
+    },
+    {
+      "id": "86a24a39-eb3d-5b3a-b686-1d5bc77eca2f",
+      "title": "Steps",
+      "description": "From the job API; covers a subset of runs",
+      "visualType": "table",
+      "pageId": "c6114c8c-10ee-57ba-82e8-ce3c2ce077fa",
+      "layout": {
+        "x": 12,
+        "y": 17,
+        "width": 12,
+        "height": 8
+      },
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "colorRules": [],
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [
+          {
+            "interaction": "column",
+            "property": "job_name",
+            "parameterId": "36ad1a21-b73b-52a3-9f0a-7e9288ef7cfb",
+            "disabled": false
+          }
+        ],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "88a2c0ae-4721-58f8-8891-cd31ddac889a"
+      }
+    },
+    {
+      "id": "0cd9e333-b9cd-52a9-8b9b-3dd52f840359",
+      "title": "Runs in scope",
+      "description": "Click a run to trace it",
+      "visualType": "table",
+      "pageId": "c6114c8c-10ee-57ba-82e8-ce3c2ce077fa",
+      "layout": {
+        "x": 0,
+        "y": 25,
+        "width": 12,
+        "height": 8
+      },
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "colorRules": [],
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [
+          {
+            "interaction": "column",
+            "property": "run_id",
+            "parameterId": "0cfd961a-ac13-5795-9421-4d60e2bf89fa",
+            "disabled": false
+          }
+        ],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "8878a752-d017-5384-8d87-fe2a8ba767c5"
+      }
+    },
+    {
+      "id": "b66bb76d-db72-5566-a9a6-00316fdec146",
+      "title": "Run trace",
+      "description": "run > job > step, longest run if none picked",
+      "visualType": "table",
+      "pageId": "c6114c8c-10ee-57ba-82e8-ce3c2ce077fa",
+      "layout": {
+        "x": 12,
+        "y": 25,
+        "width": 12,
+        "height": 8
+      },
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "colorRules": [],
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "bfe5057d-8f8d-552d-a3d7-2feda52907db"
+      }
+    },
+    {
+      "id": "a59cbc4e-ba6f-5c84-a5b8-f47b870e3483",
+      "title": "Stranded jobs",
+      "description": "Asked for a label nothing serves",
+      "visualType": "table",
+      "pageId": "c6114c8c-10ee-57ba-82e8-ce3c2ce077fa",
+      "layout": {
+        "x": 0,
+        "y": 33,
         "width": 24,
         "height": 6
       },
       "visualOptions": {
-        "colorRulesDisabled": false,
+        "colorRulesDisabled": true,
         "colorRules": [],
-        "colorStyle": "light",
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "b974933a-18e0-5127-aa42-654b4863f147"
+      }
+    },
+    {
+      "id": "31c161d3-cfe0-5195-a7e4-c01137d38a5a",
+      "title": "Right now",
+      "description": "In-flight work across the organization",
+      "visualType": "multistat",
+      "pageId": "d5150514-79e4-5317-80c9-80503a92d3f1",
+      "layout": {
+        "x": 0,
+        "y": 0,
+        "width": 12,
+        "height": 9
+      },
+      "visualOptions": {
         "multiStat__valueColumn": "value",
         "multiStat__labelColumn": "title",
         "multiStat__displayOrientation": "horizontal",
-        "multiStat__textSize": "auto",
         "multiStat__slot": {
-          "width": 5,
-          "height": 1
+          "width": 2,
+          "height": 3
         },
-        "crossFilterDisabled": false,
-        "drillthroughDisabled": false,
-        "crossFilter": [],
-        "drillthrough": []
-      },
-      "queryRef": {
-        "kind": "query",
-        "queryId": "b15e3f08-50ab-56ab-a61e-a979cb7a1582"
-      },
-      "description": "Real steps from the job API, not log groups"
-    },
-    {
-      "id": "6eb6b9a8-032a-5265-842b-2cb16297dbc1",
-      "title": "Where the time actually goes",
-      "visualType": "table",
-      "pageId": "fdd2ec42-e574-5b9b-be46-e824cb5a43af",
-      "layout": {
-        "x": 0,
-        "y": 6,
-        "width": 12,
-        "height": 9
-      },
-      "visualOptions": {
-        "colorRulesDisabled": true,
+        "multiStat__textSize": "auto",
         "colorRules": [],
-        "table__enableRenderLinks": true,
-        "table__renderLinks": [],
-        "crossFilterDisabled": false,
-        "drillthroughDisabled": false,
-        "crossFilter": [],
-        "drillthrough": []
+        "colorRulesDisabled": true,
+        "colorStyle": "light"
       },
       "queryRef": {
         "kind": "query",
-        "queryId": "24ec6af7-fac5-56d5-9951-303cbfe67d03"
-      },
-      "description": "Authored steps only, ranked by total wall time"
+        "queryId": "b10366be-08bc-5353-a343-4d2f0b2dca01"
+      }
     },
     {
-      "id": "dfb59593-9fbf-599c-be55-98c46f4de4ea",
-      "title": "Runner overhead per job",
-      "visualType": "table",
-      "pageId": "fdd2ec42-e574-5b9b-be46-e824cb5a43af",
+      "id": "62cab722-88b1-568a-9af8-b0c7214b5fb8",
+      "title": "Job arrival vs completion",
+      "description": "Jobs queued and completed per minute, last 2h",
+      "visualType": "line",
+      "pageId": "d5150514-79e4-5317-80c9-80503a92d3f1",
       "layout": {
         "x": 12,
-        "y": 6,
+        "y": 0,
         "width": 12,
         "height": 9
       },
       "visualOptions": {
-        "colorRulesDisabled": true,
-        "colorRules": [],
-        "table__enableRenderLinks": true,
-        "table__renderLinks": [],
-        "crossFilterDisabled": false,
-        "drillthroughDisabled": false,
-        "crossFilter": [],
-        "drillthrough": []
-      },
-      "queryRef": {
-        "kind": "query",
-        "queryId": "b41c0e14-eb1a-5485-ad48-740dffced427"
-      },
-      "description": "Setup + teardown as a share of job wall time"
-    },
-    {
-      "id": "ca37f4c1-ef40-518f-bcb3-654819fb6676",
-      "title": "Step failure hotspots",
-      "visualType": "table",
-      "pageId": "fdd2ec42-e574-5b9b-be46-e824cb5a43af",
-      "layout": {
-        "x": 0,
-        "y": 15,
-        "width": 12,
-        "height": 9
-      },
-      "visualOptions": {
-        "colorRulesDisabled": true,
-        "colorRules": [],
-        "table__enableRenderLinks": true,
-        "table__renderLinks": [],
-        "crossFilterDisabled": false,
-        "drillthroughDisabled": false,
-        "crossFilter": [],
-        "drillthrough": []
-      },
-      "queryRef": {
-        "kind": "query",
-        "queryId": "dbf1d64b-2d75-55e5-9983-4ee731ef3faf"
-      },
-      "description": "Ranked by hours burned on work that failed"
-    },
-    {
-      "id": "28af4136-3d85-5897-9bdb-dce55e5f9861",
-      "title": "Slowest single step executions",
-      "visualType": "stackedcolumn",
-      "pageId": "fdd2ec42-e574-5b9b-be46-e824cb5a43af",
-      "layout": {
-        "x": 12,
-        "y": 15,
-        "width": 12,
-        "height": 9
-      },
-      "visualOptions": {
-        "xColumn": "step",
+        "xColumn": "timestamp",
         "yColumns": [
-          "minutes"
+          "queued",
+          "completed"
         ],
         "seriesColumns": null,
-        "hideLegend": true,
+        "hideLegend": false,
         "legendLocation": "bottom",
-        "xColumnTitle": "",
-        "xAxisScale": "linear",
-        "yAxisScale": "linear",
         "multipleYAxes": {
           "base": {
             "id": "-1",
@@ -1216,6 +1988,8 @@
           "additional": [],
           "showMultiplePanels": false
         },
+        "xColumnTitle": "",
+        "xAxisScale": "linear",
         "verticalLine": "",
         "selectedDataOnLoad": {
           "all": false,
@@ -1232,24 +2006,103 @@
       },
       "queryRef": {
         "kind": "query",
-        "queryId": "9b343b27-2aa4-5882-9ef8-add4f3dd1381"
-      },
-      "description": "The tail, not the average"
+        "queryId": "195ae661-0b25-5624-a176-32ad10285c2f"
+      }
     },
     {
-      "id": "f3c6abab-e031-515e-bcc4-32718b4621b5",
+      "id": "c1d7178a-91ab-55be-8717-c0e7b8e1cd36",
+      "title": "Jobs in flight",
+      "description": "Queued or executing, oldest first",
+      "visualType": "table",
+      "pageId": "d5150514-79e4-5317-80c9-80503a92d3f1",
+      "layout": {
+        "x": 0,
+        "y": 9,
+        "width": 24,
+        "height": 8
+      },
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "colorRules": [],
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "033ac225-fdaa-56a2-a2f4-bcc782ef7673"
+      }
+    },
+    {
+      "id": "8a5545e0-1ab5-515b-bb69-6570fc2c8629",
+      "title": "Waiting by label",
+      "description": "Which runner pools are answering",
+      "visualType": "table",
+      "pageId": "d5150514-79e4-5317-80c9-80503a92d3f1",
+      "layout": {
+        "x": 0,
+        "y": 17,
+        "width": 12,
+        "height": 7
+      },
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "colorRules": [],
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "17a3c5b7-a2ba-5459-aeed-5f1da3d5e272"
+      }
+    },
+    {
+      "id": "2d6c7549-5fbf-5123-8554-8eb2e19a3b4d",
+      "title": "Runs in flight",
+      "description": "Phantom runs excluded",
+      "visualType": "table",
+      "pageId": "d5150514-79e4-5317-80c9-80503a92d3f1",
+      "layout": {
+        "x": 12,
+        "y": 17,
+        "width": 12,
+        "height": 7
+      },
+      "visualOptions": {
+        "colorRulesDisabled": true,
+        "colorRules": [],
+        "table__enableRenderLinks": true,
+        "table__renderLinks": [],
+        "crossFilterDisabled": false,
+        "drillthroughDisabled": false,
+        "crossFilter": [],
+        "drillthrough": []
+      },
+      "queryRef": {
+        "kind": "query",
+        "queryId": "16718de4-acc6-5015-b306-d568a017ced8"
+      }
+    },
+    {
+      "id": "a0c2de33-bef6-533a-970c-e58be33bb3e5",
       "title": "How to read this",
       "visualType": "markdownCard",
-      "pageId": "fdd2ec42-e574-5b9b-be46-e824cb5a43af",
+      "pageId": "d5150514-79e4-5317-80c9-80503a92d3f1",
       "layout": {
         "x": 0,
         "y": 24,
         "width": 24,
-        "height": 6
+        "height": 11
       },
-      "visualOptions": {},
-      "description": "",
-      "markdownText": "These are **real steps**, resolved from the REST job API using `check_run_id` from the data stream. They are not `##[group]` markers scraped from logs \u2014 those matched real step names only 58% of the time, because one step can emit many groups and many steps emit none.\n\n- **Synthetic steps are excluded from the time sinks.** `Set up job`, `Post *` and `Complete job` are runner overhead, not your CI. They get their own tile instead of drowning out authored work.\n- **Skipped and cancelled jobs are absent by design.** They return `steps: []` from the API because they never executed. They were 43% of all job events.\n- **Spread is p95 \u00f7 p50.** A high spread is a cache-miss story: the median run is fine and the tail is not. That is usually more actionable than a slow median.\n- **A 100% failure rate is often `continue-on-error`.** Polling and label-check steps show up here legitimately. Read the failure count alongside the wasted hours."
+      "markdownText": "## What \"live\" means here, precisely\n\n**The date range picker does not apply to this page.** Everything below is now.\nTurn on auto-refresh (top right) to watch it move -- ingestion lag is p50 5s /\np95 7s, so this is genuinely near-real-time rather than a slow-moving report.\n\n**There is no \"job started\" event.** The stream emits `workflow_job_created`\nthen `workflow_job_completed` and nothing in between, and `runner_name` is empty\non every created event (0 of 1,693 measured over 6h). So a job here is *queued\nor executing* and nothing can tell you which, nor which runner picked it up.\nAge is time-since-queued, never runtime.\n[issue #21](https://github.com/austenstone/terraform-actions-data-stream/issues/21)\n\n**So don't read age as \"stuck\".** A 40-minute job might be compiling or might be\nwaiting on a runner that will never come. `state` answers that instead: it asks\nwhether *any* job carrying the same labels has completed on a real runner in the\nlast 24 hours. If none has, the pool is dead -- a retired `ubuntu-20.04`, an ARC\ndeployment scaled to zero, a self-hosted box that never came back. Measured\nlive, this separated the population perfectly: every job open over 30 minutes\nwas starved, every job under 2 minutes was not.\n\n**Waiting by label is the tile to alert on.** A label whose `waiting` count\nclimbs while `verdict` says NO RUNNER is a capacity outage in progress, and it\nis visible here minutes before anyone opens a support ticket.\n\n**Runs in flight hides phantoms.** A run that emitted `created`, never emitted\n`completed`, and has no in-flight jobs is not running -- it either lost its\ncompletion event or died before dispatching anything. Those are filtered out\nhere and diagnosed properly on Stream health.\n[issue #8](https://github.com/austenstone/terraform-actions-data-stream/issues/8)",
+      "visualOptions": {}
     }
   ],
   "pages": [
@@ -1266,12 +2119,20 @@
       "id": "8232ede9-1c35-517b-bac9-63a61c479428"
     },
     {
+      "name": "Steps",
+      "id": "fdd2ec42-e574-5b9b-be46-e824cb5a43af"
+    },
+    {
       "name": "Stream health",
       "id": "f86dc82b-2ec7-5374-9f0d-1831ef704d2f"
     },
     {
-      "name": "Steps",
-      "id": "fdd2ec42-e574-5b9b-be46-e824cb5a43af"
+      "name": "Explorer",
+      "id": "c6114c8c-10ee-57ba-82e8-ce3c2ce077fa"
+    },
+    {
+      "name": "Live",
+      "id": "d5150514-79e4-5317-80c9-80503a92d3f1"
     }
   ],
   "embeddedApps": []

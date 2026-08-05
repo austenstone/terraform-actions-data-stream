@@ -104,7 +104,9 @@ Zero events with a `healthy` sink is the alert worth wiring: `ActionsEvents | wh
 eventTimestamp > ago(30m) | count`."""
 
 QUERIES = [
-    ("Stream health", "Delivery and data-quality signal for the selected window", "multistat", SCORECARD, 24, 6),
+    # multistat has its own client minimum of 6 wide x 9 tall, unlike the 12 x 6
+    # that applies to tables and charts. Anything shorter renders an error box.
+    ("Stream health", "Delivery and data-quality signal for the selected window", "multistat", SCORECARD, 24, 9),
     ("Ingestion lag", "Time from event to queryable, in seconds", "line", LAG_TREND, 12, 7),
     ("Completeness", "Created events that never got a completion", "table", PAIRING, 12, 7),
     ("Runs that never completed", "Dispatched no job, so no completion is coming", "table", STUCK, 24, 8),
