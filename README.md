@@ -532,19 +532,53 @@ data into spans; something still has to read them out of Kusto and push them to 
 — a scheduled job, a Grafana ADX datasource, or a collector with a Kusto receiver. The stream
 replaces the ingest side of `githubreceiver`, not the egress side.
 
-Two data gaps versus `githubreceiver`: no step-level spans (the stream carries no step data), and no
-repo name or actor login (identifiers only).
+One data gap versus `githubreceiver` remains: no repo name or actor login (identifiers only). The
+step-span gap is **closed** — see [Step facts](#step-facts) below, which produces 47k step spans
+that parent onto the job spans with a 100% hit rate.
+
+### Step facts
+
+The stream carries no step data, but it does carry `check_run_id` — which, despite the name, **is the
+public REST workflow-job id**. (`job_id` is internal and 404s on every route.) One call to
+`GET /repositories/{id}/actions/jobs/{check_run_id}` returns exact step names, numbers, conclusions
+and timings. No log parsing, ~1 KB per job.
+
+```bash
+KUSTO_CLUSTER=https://<cluster>.<region>.kusto.windows.net python3 scripts/ingest-steps.py
+```
+
+Populates `WorkflowSteps`, which backs `StepFacts()`, `StepStats()`, `JobTimeSplit()`,
+`StepFailures()`, `StepFailureHotspots()`, `OtelStepSpans()` and `OtelTraceTree()` from
+[`kql/enrichment.kql`](modules/azure-kusto/kql/enrichment.kql).
+
+Two rules the ingester encodes, both learned the hard way:
+
+- **Never call the job API for skipped or cancelled jobs.** They return HTTP 200 with `steps: []`
+  because they never ran. They were 43% of job events, so skipping them cuts API calls ~45% and drops
+  the apparent miss rate from 44% to 1.6%.
+- **`##[group]` markers are not steps.** A single `Set up job` step emits three groups; most steps
+  emit none. Matching log groups to real step names succeeded only 58% of the time. Group data is
+  still useful for CodeQL/Dependabot internals — `WorkflowGroupFacts()` — but it answers a different
+  question.
 
 ### Log bodies
 
 The stream carries **no log text, ever** — `eventData` is identifiers only. If you need the actual
-run logs in Azure or Splunk, the paved path is to use the stream as an event-driven *trigger* and the
-REST API as the *payload*: one rate-limit unit per run, and the archive download itself is
-unauthenticated and unmetered. That also closes the step-span gap above, since `##[group]` markers in
-the log delimit steps.
+run logs in Azure or Splunk, use the stream as an event-driven *trigger* and the REST API as the
+*payload*: one rate-limit unit per run, and the archive download itself is unauthenticated and
+unmetered.
 
-See **[docs/workflow-logs.md](docs/workflow-logs.md)** for the measured numbers, the reference
-architecture, and the reconciliation sweep you need to make it durable.
+```bash
+KUSTO_CLUSTER=https://<cluster>.<region>.kusto.windows.net python3 scripts/ingest-logs.py
+```
+
+Be aware of the volume asymmetry: 148 runs produced 716k log lines and 165 MB in Kusto, and **a
+single run was 83% of that**. Capacity planning on a mean will mislead you. Step facts are roughly a
+thousandth of the storage for the more useful data, so reach for logs only when you genuinely need
+the text.
+
+See **[docs/workflow-logs.md](docs/workflow-logs.md)** for the measured numbers, the ID-based route
+table, the reference architecture, and the reconciliation sweep you need to make it durable.
 
 ## Dashboard
 
@@ -555,8 +589,8 @@ terraform output -raw dashboard_json > dashboard.json
 ```
 
 Import it in [Kusto Web Explorer](https://dataexplorer.azure.com) (**Dashboards → New dashboard →
-Import from file**), or into Fabric with `fab import`. Four pages, twenty tiles, built entirely on
-the gold functions:
+Import from file**), or into Fabric with `fab import`. Five pages, twenty-six tiles, built entirely
+on the gold and step functions:
 
 | Page | Answers |
 |---|---|
@@ -564,6 +598,7 @@ the gold functions:
 | **Queue & runners** | Are we runner-constrained? Queue time by label, concurrency, slowest jobs to get a runner, runner-group utilization. |
 | **Where time goes** | What is CI wasting? Failure hotspots, orchestration overhead, minutes lost queueing, longest jobs. |
 | **Stream health** | Is the feed itself trustworthy? Ingestion lag percentiles, event mix, duplicate detection, delivery gaps. |
+| **Steps** | Which *step* is slow or flaky? Time sinks with a p95/p50 spread column, runner overhead split, failure hotspots by wasted hours, the slow tail. Requires `ingest-steps.py`. |
 
 Both filters — the time range and a workflow multi-select — are wired to every tile.
 
