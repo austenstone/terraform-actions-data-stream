@@ -223,6 +223,25 @@ If you want one, find your enterprise owner first.
 
 ## Quick start
 
+The examples below clone the repo and use relative module paths. To consume a module from your own
+Terraform instead, point `source` at the repo — no clone, and you can pin a version:
+
+```hcl
+module "sink" {
+  source = "git::https://github.com/austenstone/terraform-actions-data-stream.git//modules/azure-kusto?ref=main"
+
+  resource_group_name = azurerm_resource_group.this.name
+  location            = azurerm_resource_group.this.location
+  github_owner_id     = "1234567"
+  github_owner_type   = "organization"
+  cluster_name        = "myadscluster"
+}
+```
+
+Pin `ref` to a tag or commit SHA for anything you care about; `main` moves. Swap the `//modules/...`
+path for `azure-blob`, `azure-event-hub` or `aws-s3` as needed — every module exposes a
+`sink_config` output you paste into the data stream configuration.
+
 ### Azure Blob
 
 Cheapest option and the fastest way to prove the OIDC chain works end to end.
