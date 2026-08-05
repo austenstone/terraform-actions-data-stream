@@ -49,6 +49,18 @@
 // workflow_job_created/completed and workflow_run_completed. So created_at is
 // null for every attempt > 1 and RunFacts() recovers it from the job events.
 // See https://github.com/austenstone/terraform-actions-data-stream/issues/23
+//
+// The eventData.x access below is deliberately left bare, against the rule used
+// everywhere else in this file. eventData is dynamic for most rows but arrives
+// as a JSON *string* for some, where dotted access silently yields null rather
+// than erroring -- so the safe form is todynamic(tostring(eventData)).x. That
+// bug is latent here: 0 of 13,402 run events are affected today. Fixing it
+// means altering a materialized view, which cannot be done in place; it is a
+// drop and a full backfill over all history, and it breaks every consumer
+// pinned to this module. Not worth it for zero rows. Re-check with:
+//   ActionsEvents | where eventType startswith "workflow_run"
+//   | summarize countif(isnull(eventData.workflow_run_id)), count()
+// and fix it the next time this file has a breaking change anyway.
 .create ifnotexists materialized-view with (backfill=true, docString="One row per run attempt") Runs on table ${table_name} {
     ${table_name}
     | where eventType in ("workflow_run_created", "workflow_run_completed")
