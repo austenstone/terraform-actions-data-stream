@@ -659,6 +659,20 @@ independently verified working.** During the ADX schema-cache window below, the 
 `422`. Fix the destination, confirm it accepts writes, *then* PATCH. A `PATCH` also writes a
 `test_connection` row into your table ([#15](https://github.com/austenstone/terraform-actions-data-stream/issues/15)).
 
+**The damage is bounded, though.** Once the sink is revived it is genuinely fine — no lingering
+corruption, no drift, no slow degradation. Set-comparing every event emitted after the `PATCH`
+across both sinks: **82 in the control, 82 in the recovered sink, zero divergence in either
+direction.** So your exposure is exactly:
+
+```
+outage duration  +  ~13 min of post-recovery bleed  +  time-to-notice
+```
+
+That last term is the only one you control, and it is the one that dominates. An outage caught in
+five minutes is a rounding error; one caught the next morning is a hole in your dataset. This is
+what makes the failure mode *manageable* rather than disqualifying — but only if you are watching
+the destination.
+
 **What to actually do about it.** Health tells you a sink broke, exactly once, and then goes stale —
 so it is a trigger, not a monitor. Alert on both:
 
