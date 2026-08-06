@@ -1,0 +1,308 @@
+// Analytics layer for the Actions Data Stream.
+//
+// The stream emits four event types. Runs and jobs each arrive as a *pair* of
+// events (created, then completed) separated by however long the work took.
+// Every useful question ("how long did this queue?", "what failed?") therefore
+// needs those pairs collapsed into one row first.
+//
+//   bronze  ${table_name}   raw envelope, exactly as delivered
+//   silver  Jobs / Runs     materialized views, one row per job / run
+//   gold    JobFacts()      typed + derived columns, ready to query
+//           RunFacts()
+//   otel    OtelSpans()     OTel cicd.* spans with githubreceiver-compatible IDs
+//
+// Materialized views are used rather than update policies because the two halves
+// of a pair can be minutes apart; an update policy only sees one row at a time.
+//
+// NOTE ON IDEMPOTENCY: backfill is a create-only property, so `.create-or-alter
+// materialized-view with (backfill=true, ...)` succeeds the first time and then
+// fails on every subsequent run with "Unsupported property in materialized view
+// alter command". `.create ifnotexists` is used instead so re-applying is a
+// no-op. The tradeoff: changing a view definition later needs a manual
+// `.alter materialized-view` (or a drop and re-create to re-backfill).
+
+// ---------------------------------------------------------------- silver
+
+// `job_started_at` is overloaded upstream: on workflow_job_created it carries the
+// time the job was QUEUED, on workflow_job_completed it carries the time the job
+// actually STARTED. There is no job_queued_at field. Reading the queue time from
+// the created event's payload (rather than its envelope eventTimestamp) is what
+// makes queue_seconds correct -- the envelope lags emission and goes negative for
+// 5% of jobs. See https://github.com/austenstone/terraform-actions-data-stream/issues/9
+.create ifnotexists materialized-view with (backfill=true, docString="One row per job") Jobs on table ${table_name} {
+    ${table_name}
+    | where eventType in ("workflow_job_created", "workflow_job_completed")
+    | extend job_id = tolong(eventData.job_id)
+    | summarize
+        queued_at    = minif(todatetime(eventData.job_started_at), eventType == "workflow_job_created"),
+        completed_ev = arg_max(iff(eventType == "workflow_job_completed", eventTimestamp, datetime(null)), eventData)
+      by job_id
+}
+
+// Keyed by run_id AND attempt. A re-run reuses run_id, so keying on run_id
+// alone collides every attempt into one row: the newest completion wins and
+// inherits the FIRST attempt's created_at. Measured on a real re-run, an
+// 8-second attempt was reported as 24,809 seconds because it kept the original
+// attempt's start time from ~7 hours earlier.
+//
+// Note that re-runs emit NO workflow_run_created event at all -- only
+// workflow_job_created/completed and workflow_run_completed. So created_at is
+// null for every attempt > 1 and RunFacts() recovers it from the job events.
+// See https://github.com/austenstone/terraform-actions-data-stream/issues/23
+//
+// The eventData.x access below is deliberately left bare, against the rule used
+// everywhere else in this file. eventData is dynamic for most rows but arrives
+// as a JSON *string* for some, where dotted access silently yields null rather
+// than erroring -- so the safe form is todynamic(tostring(eventData)).x. That
+// bug is latent here: 0 of 13,402 run events are affected today. Fixing it
+// means altering a materialized view, which cannot be done in place; it is a
+// drop and a full backfill over all history, and it breaks every consumer
+// pinned to this module. Not worth it for zero rows. Re-check with:
+//   ActionsEvents | where eventType startswith "workflow_run"
+//   | summarize countif(isnull(eventData.workflow_run_id)), count()
+// and fix it the next time this file has a breaking change anyway.
+.create ifnotexists materialized-view with (backfill=true, docString="One row per run attempt") Runs on table ${table_name} {
+    ${table_name}
+    | where eventType in ("workflow_run_created", "workflow_run_completed")
+    | extend run_id = tolong(eventData.workflow_run_id),
+             attempt = toint(eventData.workflow_run_attempt)
+    | summarize
+        created_at   = minif(eventTimestamp, eventType == "workflow_run_created"),
+        completed_ev = arg_max(iff(eventType == "workflow_run_completed", eventTimestamp, datetime(null)), eventData)
+      by run_id, attempt
+}
+
+// ------------------------------------------------------------------ gold
+
+// queue_seconds is created.job_started_at (queued) -> completed.job_started_at
+// (actually started). Both come from the payload, never from the envelope, so
+// the value is never negative. Measured over 6,769 jobs: 0% negative, p50 3s,
+// p95 11s. Deriving queued_at from eventTimestamp instead yields 5.1% negative.
+//
+// Skipped jobs (40% of rows here) never ran, so their timestamps are synthetic:
+// job_started_at is echoed back as the queue time on both events, and
+// job_completed_at lands BEFORE it 48% of the time. Left in, they pin 40% of
+// queue_seconds at a hard 0 and understate real p99 queue by 42% (22s vs 38s).
+// Durations are nulled for them so percentile() drops them automatically while
+// the rows stay available for counting. See
+// https://github.com/austenstone/terraform-actions-data-stream/issues/10
+.create-or-alter function with (docString="One row per completed job, typed and derived", folder="gold") JobFacts() {
+    Jobs
+    | where isnotnull(completed_ev)
+    | extend
+        started_at    = todatetime(eventData.job_started_at),
+        finished_at   = todatetime(eventData.job_completed_at),
+        conclusion    = tostring(eventData.job_conclusion),
+        job_key       = tostring(eventData.job_key),
+        labels        = tostring(eventData.job_labels),
+        runner_group  = tostring(eventData.runner_group_name),
+        runner_name   = tostring(eventData.runner_name),
+        check_run_id  = tolong(eventData.check_run_id),
+        repository_id = tolong(eventData.repository_id),
+        run_id        = tolong(eventData.workflow_run_id),
+        attempt       = toint(eventData.workflow_run_attempt),
+        actor_id      = tolong(eventData.workflow_run_actor_id)
+    | extend ran = conclusion != "skipped"
+    | extend
+        job_name      = tostring(split(job_key, ".")[0]),
+        queue_seconds = iff(ran, datetime_diff("second", started_at, queued_at), int(null)),
+        exec_seconds  = iff(ran, datetime_diff("second", finished_at, started_at), int(null)),
+        runner_kind   = case(runner_group == "GitHub Actions", "GHR", isempty(runner_group), "unknown", "SHR")
+    | project job_id, check_run_id, run_id, repository_id, actor_id, attempt, job_name, job_key,
+              queued_at, started_at, finished_at, conclusion, ran, labels, runner_group, runner_name,
+              runner_kind, queue_seconds, exec_seconds
+}
+
+// LOSSY BY DESIGN. Drops any run that never emitted workflow_run_completed -- about 1% of runs,
+// mostly fork-PR approval gates (action_required) plus workflows invalid before job dispatch.
+// Never use this as the left side of a completeness audit: reconcile against the raw table
+// instead, or you will attribute this join to the stream. See issues #8 and #18.
+.create-or-alter function with (docString="One row per completed run attempt, typed and derived. Excludes runs with no completion event (~1%, see #8)", folder="gold") RunFacts() {
+    // Re-runs emit no workflow_run_created, so created_at is null for every
+    // attempt > 1. The job events DO carry the right attempt, so the earliest
+    // job creation is an accurate stand-in for when the attempt started -- it
+    // is how the run began from the runner's point of view. Without this a
+    // re-run has a null wall_seconds. See #23.
+    let attempt_starts = ${table_name}
+      | where eventType == "workflow_job_created"
+      | extend d = todynamic(tostring(eventData))
+      | summarize first_job_at = min(eventTimestamp)
+        by run_id = tolong(d.workflow_run_id), attempt = toint(d.workflow_run_attempt);
+    Runs
+    | where isnotnull(completed_ev)
+    | join kind=leftouter attempt_starts on run_id, attempt
+    | extend
+        started_at    = coalesce(created_at, first_job_at),
+        repository_id = tolong(eventData.repository_id),
+        workflow_name = tostring(eventData.workflow.name),
+        workflow_path = tostring(eventData.workflow_file_path),
+        trigger       = tostring(eventData.workflow_run_event),
+        branch        = tostring(eventData.workflow_run_head_branch),
+        conclusion    = tostring(eventData.workflow_run_conclusion),
+        actor_id      = tolong(eventData.workflow_run_actor_id)
+    | extend wall_seconds = datetime_diff("second", completed_ev, started_at)
+    | project run_id, repository_id, actor_id, attempt, created_at = started_at, completed_at = completed_ev,
+              wall_seconds, conclusion, workflow_name, workflow_path, trigger, branch
+}
+
+// Runs that emitted `created` but never `completed`. Two populations land here:
+// genuinely in-flight runs (young), and runs that terminated without ever
+// dispatching a job -- those never emit a completion at all and stay open
+// forever. See https://github.com/austenstone/terraform-actions-data-stream/issues/8
+//
+// The `has_jobs` column separates them cleanly: measured over 3,853 runs, every
+// single phantom had has_jobs == false and no run with has_jobs == true was a
+// phantom. Anything with has_jobs == false and age over a few minutes is a
+// dropped completion, not a running workflow.
+.create-or-alter function with (docString="Runs with a created event and no completion", folder="gold") StuckRuns() {
+    let jobbed = Jobs
+      | extend rid = tolong(eventData.workflow_run_id)
+      | distinct rid;
+    Runs
+    | where isnull(completed_ev)
+    | extend has_jobs = run_id in (jobbed)
+    | extend age = now() - created_at
+    | project run_id, created_at, age, has_jobs,
+              likely_dropped = not(has_jobs) and age > 10m
+    | order by created_at asc
+}
+
+// ------------------------------------------------------------------ live
+//
+// The job-level sibling of StuckRuns(). Everything above is a post-hoc view of
+// completed work; these two answer "what is happening right now".
+//
+// THE STREAM HAS NO "JOB STARTED" EVENT. It emits queued -> completed and
+// nothing in between, so a row here is "queued OR executing" and the two cannot
+// be told apart. runner_name and runner_group are empty on every created event
+// (measured 0 of 5,839 over 24h) -- runner identity only arrives at completion.
+// age_seconds is therefore time-since-queued, not runtime. See
+// https://github.com/austenstone/terraform-actions-data-stream/issues/20
+//
+// job_status on the created event is the filter that makes this work: a skipped
+// job is born "completed" and never emits a completion, so without the "queued"
+// check every skipped job would sit here as a permanent phantom.
+//
+// label_served is the honest way to read age. A long-open job is either doing
+// real work or waiting on a runner pool that will never answer, and age alone
+// cannot separate them. So instead ask whether any job carrying the same labels
+// has completed on a real runner in the last 24h. If none has, the pool is dead:
+// a retired ubuntu-20.04, an ARC deployment scaled to zero, a self-hosted
+// machine that never came back. Measured live, this split the population
+// cleanly -- every job open over 30m was label_served == false and every job
+// under 2m was true.
+.create-or-alter function with (docString="Jobs queued or executing right now, with a starvation flag", folder="live") InFlightJobs(lookback:timespan = 3d) {
+    let done = ${table_name}
+      | where eventTimestamp > ago(lookback) and eventType == "workflow_job_completed"
+      | distinct job_id = tolong(eventData.job_id);
+    let served = ${table_name}
+      | where eventTimestamp > ago(24h) and eventType == "workflow_job_completed"
+      | where isnotempty(tostring(eventData.runner_name))
+      | distinct labels = tostring(eventData.job_labels);
+    let meta = ${table_name}
+      | where eventTimestamp > ago(lookback) and eventType startswith "workflow_run"
+      | summarize arg_max(eventTimestamp, eventData) by run_id = tolong(eventData.workflow_run_id)
+      | project run_id,
+                workflow = tostring(eventData.workflow.name),
+                branch   = tostring(eventData.workflow_run_head_branch),
+                trigger  = tostring(eventData.workflow_run_event);
+    ${table_name}
+    | where eventTimestamp > ago(lookback) and eventType == "workflow_job_created"
+    | where tostring(eventData.job_status) == "queued"
+    | extend job_id = tolong(eventData.job_id)
+    | where job_id !in (done)
+    | extend
+        run_id        = tolong(eventData.workflow_run_id),
+        repository_id = tolong(eventData.repository_id),
+        attempt       = toint(eventData.workflow_run_attempt),
+        check_run_id  = tolong(eventData.check_run_id),
+        job_key       = tostring(eventData.job_key),
+        labels        = tostring(eventData.job_labels),
+        queued_at     = todatetime(eventData.job_started_at)
+    | extend job_name = tostring(split(job_key, ".")[0])
+    | lookup kind=leftouter (meta) on run_id
+    | extend
+        age_seconds  = datetime_diff("second", now(), queued_at),
+        label_served = labels in (served)
+    | project job_id, check_run_id, run_id, repository_id, attempt, job_name, job_key,
+              workflow, branch, trigger, labels, queued_at, age_seconds, label_served
+}
+
+// Runs with a created event and no completion. Same set StuckRuns() reports on,
+// carrying workflow context instead of the dropped-completion diagnosis --
+// StuckRuns answers "did the stream lose this", this answers "what is running".
+// Pair them: a run here with has_jobs == false in StuckRuns is not in flight.
+.create-or-alter function with (docString="Runs started with no completion yet", folder="live") InFlightRuns(lookback:timespan = 3d) {
+    let done = ${table_name}
+      | where eventTimestamp > ago(lookback) and eventType == "workflow_run_completed"
+      | distinct run_id = tolong(eventData.workflow_run_id);
+    ${table_name}
+    | where eventTimestamp > ago(lookback) and eventType == "workflow_run_created"
+    | extend run_id = tolong(eventData.workflow_run_id)
+    | where run_id !in (done)
+    | extend
+        repository_id = tolong(eventData.repository_id),
+        attempt       = toint(eventData.workflow_run_attempt),
+        workflow      = tostring(eventData.workflow.name),
+        workflow_path = tostring(eventData.workflow_file_path),
+        branch        = tostring(eventData.workflow_run_head_branch),
+        trigger       = tostring(eventData.workflow_run_event),
+        started_at    = eventTimestamp
+    | extend age_seconds = datetime_diff("second", now(), started_at)
+    | project run_id, repository_id, attempt, workflow, workflow_path,
+              branch, trigger, started_at, age_seconds
+}
+
+// ------------------------------------------------------------------ otel
+//
+// Span and trace IDs are hashed the same way the OpenTelemetry Collector's
+// githubreceiver hashes them, so spans emitted from here line up with spans
+// emitted from inside a runner by run-with-telemetry. Attribute names follow
+// the OTel cicd.* semantic conventions (Release Candidate as of 2026).
+//
+// Not emitted here: step-level spans. The stream carries no step data, but the
+// REST job API does -- see kql/enrichment.kql. OtelStepSpans() there parents
+// onto these job spans using the same hashing scheme, giving a complete
+// run -> job -> step tree via OtelTraceTree().
+
+.create-or-alter function with (docString="OTel cicd.* spans, githubreceiver-compatible IDs", folder="otel") OtelSpans() {
+    let runs = RunFacts()
+      | project trace_id  = substring(hash_sha256(strcat(run_id, attempt, "t")), 0, 32),
+                span_id   = substring(hash_sha256(strcat(run_id, attempt, "s")), 16, 16),
+                parent_id = "",
+                span_kind = "SERVER",
+                name      = strcat("RUN ", workflow_name),
+                start_time = created_at, end_time = completed_at,
+                run_id, attempt, repository_id,
+                ["cicd.pipeline.name"]   = workflow_name,
+                ["cicd.pipeline.run.id"] = tostring(run_id),
+                ["cicd.pipeline.result"] = conclusion,
+                ["vcs.ref.head.name"]    = branch;
+    let jobs = JobFacts()
+      | where ran
+      | project trace_id  = substring(hash_sha256(strcat(run_id, attempt, "t")), 0, 32),
+                span_id   = substring(hash_sha256(strcat(check_run_id, "-j")), 16, 16),
+                parent_id = substring(hash_sha256(strcat(run_id, attempt, "s")), 16, 16),
+                span_kind = "INTERNAL",
+                name      = job_name,
+                start_time = started_at, end_time = finished_at,
+                run_id, attempt, repository_id,
+                ["cicd.pipeline.task.name"]       = job_name,
+                ["cicd.pipeline.task.run.id"]     = tostring(check_run_id),
+                ["cicd.pipeline.task.run.result"] = conclusion,
+                ["cicd.worker.name"]              = runner_name;
+    let queues = JobFacts()
+      | where ran and queue_seconds > 0
+      | project trace_id  = substring(hash_sha256(strcat(run_id, attempt, "t")), 0, 32),
+                span_id   = substring(hash_sha256(strcat(check_run_id, "-q")), 16, 16),
+                parent_id = substring(hash_sha256(strcat(check_run_id, "-j")), 16, 16),
+                span_kind = "INTERNAL",
+                name      = strcat("queue ", job_name),
+                start_time = queued_at, end_time = started_at,
+                run_id, attempt, repository_id,
+                ["cicd.pipeline.task.name"]       = job_name,
+                ["cicd.pipeline.task.run.id"]     = tostring(check_run_id),
+                ["cicd.pipeline.task.run.result"] = "success",
+                ["cicd.worker.name"]              = runner_name;
+    union runs, jobs, queues
+}

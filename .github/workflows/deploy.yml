@@ -23,6 +23,7 @@ on:
         required: true
         options:
           - azure-kusto
+          - fabric-eventhouse
           - azure-blob
           - aws-s3
       action:
@@ -150,6 +151,7 @@ jobs:
           RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
           CLUSTER_NAME: ${{ vars.KUSTO_CLUSTER_NAME }}
           KUSTO_SKU: ${{ vars.KUSTO_SKU }}
+          FABRIC_WORKSPACE_ID: ${{ vars.FABRIC_WORKSPACE_ID }}
           STORAGE_ACCOUNT_NAME: ${{ vars.STORAGE_ACCOUNT_NAME }}
           BUCKET_NAME: ${{ vars.S3_BUCKET_NAME }}
           AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
@@ -161,9 +163,10 @@ jobs:
 
           # These have no defaults because they have to be globally unique.
           case "$TARGET" in
-            azure-kusto) required_var=KUSTO_CLUSTER_NAME;   required_val=$CLUSTER_NAME ;;
-            azure-blob)  required_var=STORAGE_ACCOUNT_NAME; required_val=$STORAGE_ACCOUNT_NAME ;;
-            aws-s3)      required_var=S3_BUCKET_NAME;       required_val=$BUCKET_NAME ;;
+            azure-kusto)      required_var=KUSTO_CLUSTER_NAME;   required_val=$CLUSTER_NAME ;;
+            fabric-eventhouse) required_var=FABRIC_WORKSPACE_ID; required_val=$FABRIC_WORKSPACE_ID ;;
+            azure-blob)       required_var=STORAGE_ACCOUNT_NAME; required_val=$STORAGE_ACCOUNT_NAME ;;
+            aws-s3)           required_var=S3_BUCKET_NAME;       required_val=$BUCKET_NAME ;;
           esac
           if [[ -z "$required_val" ]]; then
             echo "::error::Set the $required_var variable. It has to be globally unique."
@@ -178,6 +181,7 @@ jobs:
             --arg resource_group "$RESOURCE_GROUP" \
             --arg cluster_name "$CLUSTER_NAME" \
             --arg sku "$KUSTO_SKU" \
+            --arg workspace_id "$FABRIC_WORKSPACE_ID" \
             --arg storage_account "$STORAGE_ACCOUNT_NAME" \
             --arg bucket "$BUCKET_NAME" \
             --arg region "$AWS_REGION" \
@@ -192,6 +196,9 @@ jobs:
             + (if $target == "azure-kusto" then
                  (if $cluster_name == "" then {} else {cluster_name: $cluster_name} end)
                  + (if $sku == "" then {} else {sku_name: $sku} end)
+               else {} end)
+            + (if $target == "fabric-eventhouse" then
+                 {workspace_id: $workspace_id}
                else {} end)
             + (if $target == "azure-blob" and $storage_account != "" then
                  {storage_account_name: $storage_account}

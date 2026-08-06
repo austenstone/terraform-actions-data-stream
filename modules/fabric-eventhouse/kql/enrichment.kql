@@ -1,0 +1,522 @@
+// Enrichment layer: step and log detail the data stream does not carry.
+//
+// The stream tells you a job finished. It does not tell you which step was slow,
+// which step failed, or what the job printed. Both gaps close with the REST API,
+// keyed on fields the stream already gives you:
+//
+//   check_run_id -> GET /repositories/{repository_id}/actions/jobs/{check_run_id}
+//                   real display name + steps[] with per-step timings
+//   run_id       -> GET /repositories/{repository_id}/actions/runs/{run_id}/logs
+//                   zip of log bodies
+//
+// Both routes accept a numeric repository id, so nothing here needs an owner/repo
+// lookup. See scripts/ingest-steps.py and scripts/ingest-logs.py.
+//
+// Tables are populated out-of-band, so this script only creates the schema.
+// Everything stays empty and harmless until you run the ingesters.
+
+// ---------------------------------------------------------------- schema
+
+.create-merge table WorkflowSteps (
+    run_id:long, attempt:int, check_run_id:long, repo:string,
+    job_name:string, job_key:string, job_conclusion:string,
+    runner_name:string, labels:string,
+    step_number:int, step_name:string, step_status:string, step_conclusion:string,
+    started_at:datetime, completed_at:datetime, duration_seconds:real
+)
+
+.create-or-alter table WorkflowSteps ingestion json mapping "StepsMap" '[{"column":"run_id","path":"$.run_id"},{"column":"attempt","path":"$.attempt"},{"column":"check_run_id","path":"$.check_run_id"},{"column":"repo","path":"$.repo"},{"column":"job_name","path":"$.job_name"},{"column":"job_key","path":"$.job_key"},{"column":"job_conclusion","path":"$.job_conclusion"},{"column":"runner_name","path":"$.runner_name"},{"column":"labels","path":"$.labels"},{"column":"step_number","path":"$.step_number"},{"column":"step_name","path":"$.step_name"},{"column":"step_status","path":"$.step_status"},{"column":"step_conclusion","path":"$.step_conclusion"},{"column":"started_at","path":"$.started_at"},{"column":"completed_at","path":"$.completed_at"},{"column":"duration_seconds","path":"$.duration_seconds"}]'
+
+.create-merge table WorkflowLogs (
+    timestamp: datetime,
+    repo: string,
+    run_id: long,
+    attempt: int,
+    job_name: string,
+    job_index: int,
+    step: string,
+    severity: string,
+    message: string,
+    line_no: int
+)
+.create-or-alter table WorkflowLogs ingestion json mapping "WorkflowLogsMapping"
+'[{"column":"timestamp","path":"$.timestamp"},{"column":"repo","path":"$.repo"},{"column":"run_id","path":"$.run_id"},{"column":"attempt","path":"$.attempt"},{"column":"job_name","path":"$.job_name"},{"column":"job_index","path":"$.job_index"},{"column":"step","path":"$.step"},{"column":"severity","path":"$.severity"},{"column":"message","path":"$.message"},{"column":"line_no","path":"$.line_no"}]'
+.alter table WorkflowLogs policy streamingingestion enable
+.create-merge table LogArchive (
+    run_id: long,
+    attempt: int,
+    repo: string,
+    archived_at: datetime,
+    job_count: int,
+    line_count: long,
+    bytes_zip: long,
+    bytes_raw: long
+)
+.create-or-alter table LogArchive ingestion json mapping "LogArchiveMapping"
+'[{"column":"run_id","path":"$.run_id"},{"column":"attempt","path":"$.attempt"},{"column":"repo","path":"$.repo"},{"column":"archived_at","path":"$.archived_at"},{"column":"job_count","path":"$.job_count"},{"column":"line_count","path":"$.line_count"},{"column":"bytes_zip","path":"$.bytes_zip"},{"column":"bytes_raw","path":"$.bytes_raw"}]'
+.alter table LogArchive policy streamingingestion enable
+
+
+// ------------------------------------------------------------- functions
+
+// Step-level analytics.
+//
+// Source is the WorkflowSteps table, populated by steps.py from the REST job
+// API keyed on the stream's check_run_id. This is ground truth from the
+// service -- real step names, real per-step timings -- not log parsing.
+//
+// Why the API and not the logs: ##[group] markers in a log body are not steps.
+// "Runner Image Provisioner" is a group printed inside the single "Set up job"
+// step. Group-derived timings answer a different question and are exposed
+// separately as WorkflowGroupFacts().
+
+.create-or-alter function with (docString="Real steps from the job API, enriched with run context", folder="steps") StepFacts() {
+    WorkflowSteps
+    | join kind=leftouter (
+        RunFacts()
+        | project run_id, attempt, workflow_name, branch, trigger, run_conclusion = conclusion
+      ) on run_id, attempt
+    | project timestamp = started_at, run_id, attempt, check_run_id, repo,
+              workflow_name, branch, trigger, run_conclusion,
+              job_name, job_key, job_conclusion, runner_name, labels,
+              step_number, step_name, step_status, step_conclusion,
+              started_at, completed_at, duration_seconds,
+              ran = step_conclusion !in ("skipped", "cancelled"),
+              // Set up job / Post * / Complete job are runner-injected, not authored
+              synthetic = step_name in ("Set up job", "Complete job")
+                          or step_name startswith "Post "
+                          or step_name startswith "Set up runner"
+}
+
+.create-or-alter function with (docString="Duration distribution per step name", folder="steps") StepStats() {
+    StepFacts()
+    | where ran and duration_seconds >= 0
+    | summarize runs        = count(),
+                workflows   = dcount(workflow_name),
+                p50         = round(percentile(duration_seconds, 50), 1),
+                p95         = round(percentile(duration_seconds, 95), 1),
+                max_seconds = round(max(duration_seconds), 1),
+                total_hours = round(sum(duration_seconds) / 3600.0, 2),
+                failures    = countif(step_conclusion == "failure")
+      by step_name, synthetic
+    | extend failure_rate = round(100.0 * failures / runs, 1)
+    | order by total_hours desc
+}
+
+// Where the wall-clock actually goes. Splits each job into authored work vs
+// runner overhead (setup, post-actions, teardown) so "our CI is slow" can be
+// answered with a number instead of a shrug.
+.create-or-alter function with (docString="Authored step time vs runner overhead per job", folder="steps") JobTimeSplit() {
+    StepFacts()
+    | where ran and duration_seconds >= 0
+    | summarize authored_seconds  = sumif(duration_seconds, not(synthetic)),
+                overhead_seconds  = sumif(duration_seconds, synthetic),
+                steps             = count(),
+                any_failure       = countif(step_conclusion == "failure") > 0,
+                job_name          = take_any(job_name),
+                workflow_name     = take_any(workflow_name),
+                repo              = take_any(repo)
+      by check_run_id, run_id, attempt
+    | extend total_seconds  = authored_seconds + overhead_seconds
+    | extend overhead_pct   = iff(total_seconds > 0, round(100.0 * overhead_seconds / total_seconds, 1), 0.0)
+}
+
+// The step that broke the job. One row per failed job, so failure triage stops
+// at "which step" instead of "which job".
+.create-or-alter function with (docString="First failing step per job, with the step that preceded it", folder="steps") StepFailures() {
+    StepFacts()
+    | where step_conclusion == "failure"
+    | summarize arg_min(step_number, *) by check_run_id
+    | project timestamp, run_id, attempt, check_run_id, repo, workflow_name, branch,
+              job_name, runner_name, failed_step = step_name, step_number,
+              duration_seconds, labels
+}
+
+.create-or-alter function with (docString="Failure hotspots ranked by blast radius", folder="steps") StepFailureHotspots() {
+    StepFacts()
+    | where ran
+    | summarize total = count(), failures = countif(step_conclusion == "failure"),
+                repos = dcount(repo), workflows = dcount(workflow_name),
+                wasted_hours = round(sumif(duration_seconds, step_conclusion == "failure") / 3600.0, 2)
+      by step_name
+    | where failures > 0
+    | extend failure_rate = round(100.0 * failures / total, 1)
+    | order by failures desc
+}
+
+// Step spans, parented to the job spans OtelSpans() already emits, using the
+// same githubreceiver hashing. Union this with OtelSpans() for a complete
+// run -> job -> step trace tree. This closes the gap OtelSpans() documents.
+// StepFacts().repo is the repository id carried as a string, so this must be
+// cast back to long. OtelSpans() emits repository_id as a long, and union does
+// not reconcile the two -- it silently emits repository_id_long AND
+// repository_id_string, after which OtelTraceTree() has no repository_id column
+// at all and every OTLP consumer sees two half-populated attributes.
+.create-or-alter function with (docString="Step-level OTel spans, parented to OtelSpans() job spans", folder="otel") OtelStepSpans() {
+    StepFacts()
+    | where ran and duration_seconds >= 0    | project trace_id   = substring(hash_sha256(strcat(run_id, attempt, "t")), 0, 32),
+              span_id    = substring(hash_sha256(strcat(check_run_id, "-s", step_number)), 16, 16),
+              parent_id  = substring(hash_sha256(strcat(check_run_id, "-j")), 16, 16),
+              span_kind  = "INTERNAL",
+              name       = step_name,
+              start_time = started_at, end_time = completed_at,
+              run_id, attempt, repository_id = tolong(repo),
+              ["cicd.pipeline.name"]             = workflow_name,
+              ["cicd.pipeline.run.id"]           = tostring(run_id),
+              ["cicd.pipeline.task.name"]        = job_name,
+              ["cicd.pipeline.task.run.id"]      = tostring(check_run_id),
+              ["cicd.pipeline.action.name"]      = step_name,
+              ["cicd.pipeline.action.number"]    = step_number,
+              ["cicd.pipeline.action.result"]    = step_conclusion,
+              ["cicd.worker.name"]               = runner_name
+}
+
+.create-or-alter function with (docString="Full run/job/step trace tree, githubreceiver-compatible", folder="otel") OtelTraceTree() {
+    union OtelSpans(), OtelStepSpans()
+}
+
+// Log-derived analytics. Depends on WorkflowLogs (one row per log line).
+//
+// This is the layer the Data Stream alone cannot produce: the stream carries
+// run and job grain only, so OtelSpans() has a documented gap at step level.
+// ##[group]/##[endgroup] markers in the log bodies close it.
+
+.execute database script <|
+//
+// ---------------------------------------------------------------- step facts
+//
+// Pairs ##[group] with its ##[endgroup] by ordinal within a job rather than by
+// step name, because the same step name can legitimately appear twice in one job.
+// A group with no matching endgroup (job cancelled or crashed mid-step) yields a
+// null end and is flagged truncated rather than silently dropped.
+.create-or-alter function with (docString="One row per step, derived from ##[group] markers", folder="logs") WorkflowGroupFacts() {
+    WorkflowLogs
+    | where severity in ("group", "endgroup")
+    | order by run_id asc, attempt asc, job_index asc, line_no asc
+    | extend jobkey = strcat(run_id, "/", attempt, "/", job_index)
+    | extend ordinal = row_cumsum(toint(severity == "group"), jobkey != prev(jobkey))
+    | summarize started   = minif(timestamp, severity == "group"),
+                ended     = maxif(timestamp, severity == "endgroup"),
+                step_name = take_any(step),
+                repo      = take_any(repo),
+                job_name  = take_any(job_name)
+      by run_id, attempt, job_index, ordinal
+    | extend truncated = isnull(ended)
+    | extend duration_seconds = iff(truncated, real(null), (ended - started) / 1s)
+    | project run_id, attempt, repo, job_name, job_index, step_ordinal = ordinal,
+              step_name, started, ended, duration_seconds, truncated
+}
+
+// Per-step log volume and error counts, joined onto the step boundaries.
+.create-or-alter function with (docString="Log ##[group] blocks enriched with line counts and severity rollups", folder="logs") WorkflowGroupStats() {
+    let line_stats = WorkflowLogs
+      | where severity !in ("group", "endgroup") and isnotempty(step)
+      | summarize lines = count(),
+                  errors = countif(severity == "error"),
+                  warnings = countif(severity == "warning"),
+                  bytes = sum(strlen(message))
+        by run_id, attempt, job_index, step;
+    WorkflowGroupFacts()
+    | join kind=leftouter line_stats on $left.run_id == $right.run_id
+        and $left.attempt == $right.attempt
+        and $left.job_index == $right.job_index
+        and $left.step_name == $right.step
+    | project run_id, attempt, repo, job_name, job_index, step_ordinal, step_name,
+              started, ended, duration_seconds, truncated,
+              lines = coalesce(lines, 0), errors = coalesce(errors, 0),
+              warnings = coalesce(warnings, 0), bytes = coalesce(bytes, 0)
+}
+
+//
+
+// OTel LogRecord shape. trace_id is computable from the log row alone — no join —
+// because it hashes only run_id + attempt. span_id needs the job span, so that
+// correlation is a join against JobFacts().
+.create-or-alter function with (docString="Log lines as OTel LogRecords, trace-correlated", folder="otel") OtelLogRecords() {
+    let sev = dynamic({"error": 17, "warning": 13, "notice": 10, "info": 9});
+    let jobs = JobFacts() | where ran | project run_id, attempt, job_name, check_run_id;
+    WorkflowLogs
+    | where severity !in ("group", "endgroup")
+    | join kind=leftouter jobs on run_id, attempt, job_name
+    | project ["time_unix_nano"]      = timestamp,
+              ["severity_text"]       = toupper(severity),
+              ["severity_number"]     = toint(sev[severity]),
+              ["body"]                = message,
+              trace_id = substring(hash_sha256(strcat(run_id, attempt, "t")), 0, 32),
+              span_id  = iff(isnotnull(check_run_id),
+                             substring(hash_sha256(strcat(check_run_id, "-j")), 16, 16), ""),
+              ["cicd.pipeline.run.id"]     = tostring(run_id),
+              ["cicd.pipeline.task.name"]  = job_name,
+              ["cicd.pipeline.action.name"] = step,
+              ["vcs.repository.id"]        = repo
+}
+
+//
+// -------------------------------------------------------------- error triage
+//
+// The reason to keep log bodies queryable at all: fleet-wide failure clustering.
+// Numbers, hex, UUIDs, paths and durations are masked so that the same failure
+// from different runs collapses to one signature.
+.create-or-alter function with (docString="Error and warning lines normalised into clusterable signatures", folder="logs") LogFailureSignatures() {
+    WorkflowLogs
+    | where severity in ("error", "warning")
+    | extend signature = message
+    | extend signature = replace_regex(signature, @"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", "<uuid>")
+    | extend signature = replace_regex(signature, @"[0-9a-fA-F]{40}", "<sha>")
+    | extend signature = replace_regex(signature, @"(/[\w.\-]+){2,}", "<path>")
+    | extend signature = replace_regex(signature, @"\d+(\.\d+)?(ms|s|m|h)\b", "<dur>")
+    | extend signature = replace_regex(signature, @"\d+", "<n>")
+    | project timestamp, repo, run_id, attempt, job_name, step, severity,
+              message, signature = substring(signature, 0, 300)
+}
+
+//
+// ------------------------------------------------------------- the hierarchy
+//
+// Drill-down from org to step. The stream makes this harder than it looks for
+// two reasons, both handled here so callers never have to think about them:
+//
+//   1. Names are absent. Every event carries repository_id and
+//      repository_owner_id and no names, so an unenriched filter can only
+//      offer "repo 1324410793". scripts/ingest-repos.py fills the Repos table.
+//
+//   2. Job events and run events are disjoint. A workflow_job_completed event
+//      has no workflow name; a workflow_run_completed event has no job. So
+//      every level above "job" is a join on workflow_run_id, never a projection.
+//
+// There is no enterprise column because there is no enterprise field on the
+// wire. A stream is scoped to one enterprise or one org, so the database IS
+// the enterprise. Org is the top navigable level, and it is only multi-valued
+// when the stream is enterprise-scoped.
+
+.create-merge table Repos (
+    repository_id: long, owner_id: long, owner: string, name: string,
+    full_name: string, visibility: string, archived: bool,
+    resolved: bool, resolved_at: datetime
+)
+
+.create-or-alter table Repos ingestion json mapping "ReposMap" '[{"column":"repository_id","path":"$.repository_id"},{"column":"owner_id","path":"$.owner_id"},{"column":"owner","path":"$.owner"},{"column":"name","path":"$.name"},{"column":"full_name","path":"$.full_name"},{"column":"visibility","path":"$.visibility"},{"column":"archived","path":"$.archived"},{"column":"resolved","path":"$.resolved"},{"column":"resolved_at","path":"$.resolved_at"}]'
+
+// Rows are appended, so collapse to the newest per id. Repos get renamed and
+// transferred; the newest row is the current name.
+.create-or-alter function with (docString="Current name per repository id", folder="hierarchy") RepoNames() {
+    Repos
+    | summarize arg_max(resolved_at, *) by repository_id
+    | project repository_id, owner_id, org = owner, repo = full_name,
+              repo_short = name, visibility, archived, resolved
+}
+
+// The spine. One row per job, carrying every ancestor level, so a single tile
+// can group by org, repo, workflow or job without re-deriving the joins.
+// leftouter throughout: a job whose run event has not landed yet, or whose repo
+// has been deleted, still appears rather than silently vanishing from totals.
+.create-or-alter function with (docString="Org > repo > workflow > job, one row per job", folder="hierarchy") HierarchyJobs() {
+    JobFacts()
+    | join kind=leftouter (
+        RunFacts()
+        | project run_id, attempt, workflow_name, workflow_path, branch, trigger,
+                  run_conclusion = conclusion, run_started = created_at,
+                  run_wall_seconds = wall_seconds
+      ) on run_id, attempt
+    | join kind=leftouter (RepoNames()) on repository_id
+    | extend org       = coalesce(org, "unresolved"),
+             repo      = coalesce(repo, strcat("repo/", tostring(repository_id))),
+             // A run event that has not landed leaves the workflow unknown.
+             // Label it rather than dropping the job from workflow rollups.
+             workflow  = coalesce(workflow_name, "(pending run event)"),
+             // A job that ran but was never assigned a runner asked for a label
+             // nothing serves (a retired image, or a self-hosted group with no
+             // online runner). The stream sets job_started_at at queue time, so
+             // its "execution" is really the wait before the 24h timeout kills
+             // it. On this cluster that is 9 jobs -- 0.1% of rows and 47% of all
+             // compute hours -- so leaving them in makes every duration and
+             // exec-share number wrong. Flagged, not dropped: see StrandedJobs().
+             stranded  = ran and runner_kind == "unknown" and isempty(runner_name)
+    | project timestamp = coalesce(started_at, queued_at), org, repo, repository_id,
+              workflow, workflow_path, branch, trigger, run_id, attempt,
+              run_conclusion, run_started, run_wall_seconds,
+              check_run_id, job_id, job_name, job_key, conclusion, ran, stranded,
+              runner_name, runner_group, runner_kind, labels,
+              queued_at, started_at, finished_at, queue_seconds, exec_seconds
+}
+
+// The jobs excluded from every execution statistic above, surfaced on purpose.
+// Each one burns a runner-hours-shaped hole in the dashboard and usually means a
+// workflow still pins a retired label, so this doubles as a migration to-do list.
+.create-or-alter function with (docString="Jobs that never got a runner and timed out waiting", folder="hierarchy") StrandedJobs() {
+    HierarchyJobs()
+    | where stranded
+    | extend label = tostring(todynamic(labels)[0]),
+             waited_hours = round(exec_seconds / 3600.0, 2)
+    | project timestamp, org, repo, workflow, job_name, label, labels,
+              conclusion, waited_hours, run_id, job_id
+    | order by waited_hours desc
+}
+
+// The leaf level. Only covers jobs whose steps have been ingested, so treat it
+// as a sample of the spine rather than a superset -- counts here are lower than
+// HierarchyJobs() by design.
+.create-or-alter function with (docString="Org > repo > workflow > job > step, one row per step", folder="hierarchy") HierarchySteps() {
+    StepFacts()
+    | extend repository_id = tolong(repo)
+    | join kind=leftouter (RepoNames()) on repository_id
+    | extend org  = coalesce(org, "unresolved"),
+             repo = coalesce(repo1, strcat("repo/", tostring(repository_id)))
+    | project timestamp, org, repo, repository_id,
+              workflow = coalesce(workflow_name, "(pending run event)"),
+              branch, trigger, run_id, attempt, run_conclusion,
+              check_run_id, job_name, job_conclusion, runner_name,
+              step_number, step_name, step_status, step_conclusion,
+              started_at, completed_at, duration_seconds, ran, synthetic
+}
+
+// One row per level of the tree with its child count. Feeds a breadcrumb or a
+// "what am I looking at" tile without five separate dcount queries.
+.create-or-alter function with (docString="Child counts at every level of the tree", folder="hierarchy") HierarchyRollup() {
+    // Minutes exclude stranded jobs for the same reason the summaries do -- a
+    // job that waited 24h for a runner it never got is not 24h of compute.
+    let h = HierarchyJobs() | where not(stranded);
+    union
+      // "unresolved" is the bucket for deleted repos, not an org, so it is not
+      // a node in the tree even though it is a legitimate value of the column.
+      (h | summarize level = "org",      depth = 1, nodes = dcountif(org, org != "unresolved", 4),
+                     jobs = count(), minutes = sum(exec_seconds) / 60.0),
+      (h | summarize level = "repo",     depth = 2, nodes = dcount(repo, 4),
+                     jobs = count(), minutes = sum(exec_seconds) / 60.0),
+      (h | summarize level = "workflow", depth = 3, nodes = dcount(strcat(repo, "/", workflow), 4),
+                     jobs = count(), minutes = sum(exec_seconds) / 60.0),
+      (h | summarize level = "job",      depth = 4, nodes = dcount(strcat(repo, "/", workflow, "/", job_name), 4),
+                     jobs = count(), minutes = sum(exec_seconds) / 60.0),
+      // Steps come from the job-API enrichment, which covers a subset of runs.
+      // Lower minutes here is expected coverage, not missing compute.
+      (HierarchySteps() | summarize level = "step", depth = 5, nodes = dcount(step_name, 4),
+                     jobs = count(), minutes = sum(duration_seconds) / 60.0)
+    | extend minutes = round(minutes, 1)
+    | order by depth asc
+    | project-away depth
+}
+
+// Per-level summary in the shape CI dashboards conventionally show: duration
+// percentiles, share of total execution time, and failure rate side by side.
+// Percentiles beat averages here because CI duration is bimodal -- a cache hit
+// and a cache miss are two different distributions wearing one job name.
+.create-or-alter function with (docString="Duration percentiles, exec share and failure rate per workflow", folder="hierarchy") WorkflowSummary() {
+    let h = HierarchyJobs() | where ran and not(stranded);
+    let total = toscalar(h | summarize sum(exec_seconds));
+    h
+    | summarize runs = dcount(run_id, 4), jobs = count(),
+                p50 = round(percentile(exec_seconds, 50), 1),
+                p95 = round(percentile(exec_seconds, 95), 1),
+                max_seconds = round(max(exec_seconds), 1),
+                exec_seconds = sum(exec_seconds),
+                failures = countif(conclusion == "failure"),
+                queue_p95 = round(percentile(queue_seconds, 95), 1)
+      by org, repo, workflow
+    | extend exec_share_pct = round(100.0 * exec_seconds / total, 2),
+             failure_pct    = round(100.0 * failures / jobs, 1),
+             exec_hours     = round(exec_seconds / 3600.0, 2)
+    | project-away exec_seconds
+    | order by exec_hours desc
+}
+
+.create-or-alter function with (docString="Duration percentiles, exec share and failure rate per job", folder="hierarchy") JobSummary() {
+    let h = HierarchyJobs() | where ran and not(stranded);
+    let total = toscalar(h | summarize sum(exec_seconds));
+    h
+    | summarize runs = count(),
+                p50 = round(percentile(exec_seconds, 50), 1),
+                p95 = round(percentile(exec_seconds, 95), 1),
+                max_seconds = round(max(exec_seconds), 1),
+                exec_seconds = sum(exec_seconds),
+                failures = countif(conclusion == "failure"),
+                queue_p95 = round(percentile(queue_seconds, 95), 1),
+                runner = any(runner_kind)
+      by org, repo, workflow, job_name
+    | extend exec_share_pct = round(100.0 * exec_seconds / total, 2),
+             failure_pct    = round(100.0 * failures / runs, 1),
+             exec_hours     = round(exec_seconds / 3600.0, 2)
+    | project-away exec_seconds
+    | order by exec_hours desc
+}
+
+//
+// ------------------------------------------------------------- trace view
+//
+// A flame graph rendered as text. Kusto dashboards have no gantt or flame
+// visual, and the OTel span data is already correct (see OtelTraceTree), so
+// the gap is purely presentational. A monospace bar column closes it inside a
+// plain table tile: offset by start, width by duration, indent by depth.
+//
+// For an actual interactive flame graph, export OtelSpans() + OtelStepSpans()
+// over OTLP to any tracing backend. This is the zero-dependency version.
+.create-or-alter function with (docString="Text flame graph for one run: run > job > step", folder="hierarchy") RunTimeline(target_run:long, width:int = 60) {
+    let jobs = HierarchyJobs() | where run_id == target_run;
+    let steps = HierarchySteps() | where run_id == target_run;
+    // Every numeric literal is cast explicitly. A bare 0 is an int, step_number
+    // is a long, and union does not reject that -- it silently emits both
+    // sort_step_int and sort_step_long, after which the column no longer exists
+    // under the name you used and the failure surfaces as General_BadRequest.
+    let spans =
+        union
+          (jobs | summarize started_at = min(started_at), completed_at = max(finished_at),
+                            name = any(workflow), conclusion = any(run_conclusion)
+                | extend depth = tolong(0), sort_job = "", sort_step = tolong(0)),
+          (jobs | project started_at, completed_at = finished_at, name = job_name,
+                          conclusion, depth = tolong(1), sort_job = job_name,
+                          sort_step = tolong(0)),
+          (steps | project started_at, completed_at, name = step_name,
+                           conclusion = step_conclusion, depth = tolong(2),
+                           sort_job = job_name, sort_step = tolong(step_number))
+        | where isnotnull(started_at) and isnotnull(completed_at);
+    let bounds = spans | summarize lo = min(started_at), hi = max(completed_at);
+    let t0 = toscalar(bounds | project lo);
+    // Guard the divisor: a run whose spans all share one timestamp would divide by zero.
+    let span_seconds = toscalar(bounds | project max_of(1.0, (hi - lo) / 1s));
+    spans
+    | extend seconds = round((completed_at - started_at) / 1s, 1)
+    | extend offset  = tolong(width * ((started_at - t0) / 1s) / span_seconds)
+    // A sub-pixel span still gets one block, otherwise the fastest steps vanish.
+    | extend bars    = max_of(tolong(1), tolong(width * (seconds / span_seconds)))
+    // Do NOT name this column "timeline" -- that identifier is reserved and the
+    // only feedback is General_BadRequest with no detail.
+    | extend gantt = strcat(strrep(" ", offset), strrep("=", bars))
+    | project label = strcat(strrep("  ", depth), name),
+              seconds, conclusion, gantt, started_at,
+              depth, sort_job, sort_step
+    | order by sort_job asc, depth asc, sort_step asc, started_at asc
+    | project-away depth, sort_job, sort_step
+}
+
+// ------------------------------------------------------------------ live
+//
+// Name-resolved wrappers over the stream-only InFlightJobs()/InFlightRuns() in
+// analytics.kql, exactly as HierarchyJobs() wraps JobFacts(). leftouter so a job
+// in a repo that has not been ingested into Repos yet still shows up -- it will
+// carry the id instead of a name rather than vanishing from a live count, which
+// matters more here than anywhere else because brand new repos are precisely the
+// ones someone is watching.
+
+.create-or-alter function with (docString="In-flight jobs with org and repo names", folder="live") LiveJobs(lookback:timespan = 3d) {
+    InFlightJobs(lookback)
+    | lookup kind=leftouter (RepoNames() | project repository_id, org, repo) on repository_id
+    | extend repo = coalesce(repo, strcat("repo:", tostring(repository_id)))
+    | project org, repo, workflow, job_name, labels, label_served, queued_at, age_seconds,
+              branch, trigger, run_id, attempt, job_id, check_run_id, repository_id
+    | order by age_seconds desc
+}
+
+.create-or-alter function with (docString="In-flight runs with org and repo names", folder="live") LiveRuns(lookback:timespan = 3d) {
+    let jobs = InFlightJobs(lookback)
+      | summarize live_jobs = count(), starved_jobs = countif(not(label_served)) by run_id;
+    InFlightRuns(lookback)
+    | lookup kind=leftouter (RepoNames() | project repository_id, org, repo) on repository_id
+    | extend repo = coalesce(repo, strcat("repo:", tostring(repository_id)))
+    | lookup kind=leftouter (jobs) on run_id
+    | extend live_jobs = coalesce(live_jobs, 0), starved_jobs = coalesce(starved_jobs, 0)
+    // A run with no in-flight jobs is not running: either every job finished and
+    // the run completion was dropped, or it died before dispatching anything.
+    | extend phantom = live_jobs == 0
+    | project org, repo, workflow, branch, trigger, started_at, age_seconds,
+              live_jobs, starved_jobs, phantom, run_id, attempt, repository_id
+    | order by age_seconds desc
+}

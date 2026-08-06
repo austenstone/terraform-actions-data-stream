@@ -28,6 +28,7 @@ setup is what these modules do.
 | [`modules/azure-identity`](modules/azure-identity) | User-assigned managed identity + federated credential. Used by the other Azure modules. |
 | [`modules/azure-blob`](modules/azure-blob) | Storage account, container, `Storage Blob Data Contributor` role assignment. |
 | [`modules/azure-kusto`](modules/azure-kusto) | Kusto cluster, database, table + ingestion mapping, `Ingestor` role assignment. |
+| [`modules/fabric-eventhouse`](modules/fabric-eventhouse) | Fabric eventhouse, KQL database, table + ingestion mapping, `Ingestor` grant. Same engine as `azure-kusto`, plus Real-Time Dashboards, Activator alerting and OneLake mirroring. |
 | [`modules/azure-event-hub`](modules/azure-event-hub) | Event Hubs namespace, hub, `Azure Event Hubs Data Sender` role assignment. |
 | [`modules/aws-s3`](modules/aws-s3) | OIDC provider, IAM role with a scoped trust policy, S3 bucket, write policy. |
 
@@ -80,7 +81,7 @@ Terraform instead, point `source` at the repo — no clone, and you can pin a ve
 
 ```hcl
 module "sink" {
-  source = "git::https://github.com/austenstone/terraform-actions-data-stream.git//modules/azure-kusto?ref=v0.2.0"
+  source = "git::https://github.com/austenstone/terraform-actions-data-stream.git//modules/azure-kusto?ref=v0.3.0"
 
   resource_group_name = azurerm_resource_group.this.name
   location            = azurerm_resource_group.this.location
@@ -133,6 +134,49 @@ envelope:
 | `eventData` | `dynamic` |
 
 `eventData` is `dynamic` because its shape differs per event type.
+
+### Fabric Eventhouse
+
+A Fabric eventhouse *is* the Kusto engine, and it hands out the same two URIs the `azure_kusto` sink
+takes. So this is not a different integration — it is the same sink pointed somewhere better.
+
+```bash
+cd examples/fabric-eventhouse
+cp terraform.tfvars.example terraform.tfvars   # then edit it
+terraform init
+terraform apply
+```
+
+Same table, same mapping, same `sink_config` shape as `azure-kusto` above. What changes:
+
+- **No ADX cluster.** The eventhouse bills against shared Fabric capacity and suspends when idle,
+  rather than $100/month for a cluster sitting there doing nothing.
+- **Real-Time Dashboards** and **Activator** alerting land on top of the data with no pipeline.
+- **OneLake mirroring** writes the same rows to Delta at no extra storage cost, which is what makes
+  **Power BI Direct Lake** work without a copy.
+
+You need a workspace on Fabric capacity (not Pro) and Database Admin on the database — Fabric
+workspace Admin, Member and Contributor all inherit it. If you have less, set
+`create_ingestor_grant = false` and hand the `ingestor_grant_command` output to someone who does.
+
+Schema and grants are applied over the Kusto management endpoint, because the `microsoft/fabric`
+provider cannot express either. `curl` is the only requirement. It authenticates with the `az` CLI
+when it is on `PATH`; on Terraform Cloud, Spacelift or any runner without it, export a bearer token
+instead and the CLI is skipped:
+
+```bash
+export KUSTO_TOKEN="$(az account get-access-token \
+  --resource "$(terraform output -raw cluster_uri)" --query accessToken -o tsv)"
+```
+
+> [!TIP]
+> Streaming ingestion caches table schema for ~5 minutes. Wait after `apply` before configuring the
+> sink, or `test-connection` returns `BadRequest_EntityNotFound` on a table that demonstrably exists.
+> If streaming still fails, `ingestion_type = "queued"` uses a different endpoint. See the
+> [module README](modules/fabric-eventhouse/README.md#streaming-ingestion-policy-is-an-unknown).
+
+Both modules can run at once against the same stream. Fan-out is exact — the two sinks get identical
+events carrying the same `eventUuid`, so you can run them in parallel and diff before cutting over.
 
 ### Azure Event Hubs
 
@@ -248,6 +292,7 @@ Set these as repository **variables**, not secrets. None of them are sensitive.
 | `TF_STATE_STORAGE_ACCOUNT` | Azure | Globally unique. Created on first run. |
 | `KUSTO_CLUSTER_NAME` | azure-kusto | Globally unique. |
 | `KUSTO_SKU` | azure-kusto | Dev SKUs run on spare capacity and can fail. `Dev(No SLA)_Standard_D11_v2` is a reliable fallback. |
+| `FABRIC_WORKSPACE_ID` | fabric-eventhouse | Workspace GUID. Must be backed by Fabric capacity, not Pro. |
 | `STORAGE_ACCOUNT_NAME` | azure-blob | Globally unique, 3-24 lowercase alphanumeric. |
 | `AWS_ROLE_ARN` `AWS_REGION` | aws-s3 | Role the workflow assumes. |
 | `TF_STATE_BUCKET` `S3_BUCKET_NAME` | aws-s3 | Globally unique. |

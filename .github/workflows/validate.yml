@@ -37,9 +37,11 @@ jobs:
           - modules/azure-identity
           - modules/azure-blob
           - modules/azure-kusto
+          - modules/fabric-eventhouse
           - modules/aws-s3
           - examples/azure-blob
           - examples/azure-kusto
+          - examples/fabric-eventhouse
           - examples/aws-s3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -54,6 +56,25 @@ jobs:
           terraform init -backend=false -input=false
           terraform validate
 
+  kql-drift:
+    # modules/fabric-eventhouse vendors the shared KQL so it stands alone when
+    # copied out of the repo. This is the guard against the copies diverging.
+    runs-on: ubuntu-slim
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Compare vendored KQL against modules/azure-kusto/kql
+        run: |
+          status=0
+          for f in analytics enrichment; do
+            if ! diff -u "modules/azure-kusto/kql/$f.kql" "modules/fabric-eventhouse/kql/$f.kql"; then
+              echo "::error file=modules/fabric-eventhouse/kql/$f.kql::Vendored copy has drifted. Run: cp modules/azure-kusto/kql/$f.kql modules/fabric-eventhouse/kql/$f.kql"
+              status=1
+            fi
+          done
+          exit $status
+
   shellcheck:
     # Not ubuntu-slim: shellcheck is not in the slim image.
     runs-on: ubuntu-latest
@@ -61,4 +82,4 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: shellcheck scripts/*.sh
+      - run: shellcheck scripts/*.sh modules/*/scripts/*.sh

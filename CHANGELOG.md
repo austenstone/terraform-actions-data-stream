@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+## v0.3.0 (2026-08-05)
+
+Additive and non-breaking. Existing `azure-kusto`, `azure-blob` and `aws-s3` deployments plan
+unchanged.
+
+### Added
+
+- `modules/fabric-eventhouse` — a Microsoft Fabric eventhouse and KQL database carrying the same
+  table, ingestion mapping, analytics and enrichment layers as `modules/azure-kusto`. An eventhouse
+  *is* the Kusto engine, so its `sink_config` output is shape-identical and the `azure_kusto` sink
+  takes it with a URI swap and no code change. Unlocks Real-Time Dashboards, Activator alerting,
+  OneLake mirroring to Delta and Power BI Direct Lake, and drops the standing ADX cluster cost.
+- `examples/fabric-eventhouse`, plus `fabric-eventhouse` as a `deploy.yml` target driven by a new
+  `FABRIC_WORKSPACE_ID` repository variable.
+- `kql-drift` CI job, guarding the vendored copy of the shared KQL against divergence.
+
+### Changed
+
+- `scripts/apply-kql.sh` needs only `curl`. JSON is built with parameter expansion instead of `jq`,
+  and a `KUSTO_TOKEN` environment variable bypasses the Azure CLI, so the module runs on Terraform
+  Cloud, Spacelift and bare runners.
+- `shellcheck` in CI now covers `modules/*/scripts/*.sh`, not just `scripts/*.sh`.
+
 ## v0.2.0 (2026-08-05)
 
 Additive and non-breaking. No materialized view changed, so upgrading from `v0.1.0` does
