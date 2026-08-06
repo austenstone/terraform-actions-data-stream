@@ -80,9 +80,10 @@ locals {
   KQL
 
   # The analytics and enrichment layers are engine-portable and identical to
-  # modules/azure-kusto/kql. They are vendored rather than referenced across
-  # modules so this directory stands alone when it is copied out of the repo.
-  # CI fails if the two copies drift.
+  # modules/azure-kusto/kql. They are vendored rather than read across the module
+  # boundary: file() paths resolve at plan time with no dependency tracking, so
+  # reaching outside the module fails silently instead of loudly. CI fails if the
+  # two copies drift.
   analytics = templatefile("${path.module}/kql/analytics.kql", {
     table_name = var.table_name
   })

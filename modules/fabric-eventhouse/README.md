@@ -45,14 +45,21 @@ terraform apply
 
 ## The KQL is vendored, not shared
 
-[`kql/`](kql) is a byte-identical copy of `modules/azure-kusto/kql`. Reading it across modules would
-work through a `git::` source — Terraform clones the whole repository — but breaks the moment
-somebody copies this directory out on its own. The `kql-drift` job in
-[`validate.yml`](../../.github/workflows/validate.yml) fails the build if the copies diverge:
+[`kql/`](kql) is a byte-identical copy of `modules/azure-kusto/kql`. Reading those files across the
+module boundary worked, but only by accident of how Terraform lays modules out on disk, and it failed
+silently rather than loudly when the layout changed. `file()` and `templatefile()` paths are resolved
+at plan time with no dependency tracking, so nothing would have told you the module had reached
+outside itself.
+
+The `kql-drift` job in [`validate.yml`](../../.github/workflows/validate.yml) fails the build if the
+copies diverge:
 
 ```bash
 cp modules/azure-kusto/kql/analytics.kql modules/fabric-eventhouse/kql/analytics.kql
 ```
+
+Terraform module sources are a separate matter — `../azure-identity` is a real module dependency and
+resolves normally through a `git::` source, which clones the whole repository.
 
 ## ThrowOnErrors is not optional
 
