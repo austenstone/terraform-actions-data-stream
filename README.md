@@ -18,11 +18,8 @@ setup is what these modules do.
 > cloud config is fine; ask GitHub to enable event publishing for your org or enterprise.
 
 > [!TIP]
-> Everything below was measured against a live stream rather than read off a docs page. Findings
-> are written up for GitHub field teams in
-> [github/actions-sales#953](https://github.com/github/actions-sales/discussions/953) and reported
-> to the service team in
-> [github/actions-data-stream#211](https://github.com/github/actions-data-stream/issues/211).
+> Everything below was measured against a live stream rather than read off a docs page, and the
+> rough edges found along the way have been reported to the service team.
 
 ## What gets created
 
@@ -42,53 +39,16 @@ Each module outputs a `sink_config` object you paste straight into the data stre
 > have Contributor, set `create_role_assignment = false` and hand the `role_assignment_command`
 > output to whoever does. Worth knowing before you book the meeting.
 
-## Known preview issues
+## Can you trust it?
 
-Data Stream is a preview feature and has rough edges. The ones I've hit are logged as
+Mostly yes, with specific exceptions — all of them reconciled against the REST API rather than
+taken on faith from the stream agreeing with itself.
+
+Data Stream is a preview and has rough edges. The ones I've hit are filed as
 [`preview-bug`](https://github.com/austenstone/terraform-actions-data-stream/issues?q=is%3Aissue+label%3Apreview-bug)
-issues here — worth a skim before you debug something that isn't your fault. The two that cost the
-most time:
-
-- [#1](https://github.com/austenstone/terraform-actions-data-stream/issues/1) — Kusto sinks **500**
-  instead of returning a validation error when `ingestion_uri` is missing, and it's required even for
-  streaming ingestion.
-- [#2](https://github.com/austenstone/terraform-actions-data-stream/issues/2) — a sink reports
-  `active` while delivering nothing, because event emission is behind a *second* feature flag.
-- [#11](https://github.com/austenstone/terraform-actions-data-stream/issues/11) — `sink_health`
-  reports failures well, but `last_success_at` only tracks connection tests, so a busy sink and a
-  silent one look identical — and an unhealthy sink doesn't self-heal. See
-  [Operating it](#operating-it).
-- [#12](https://github.com/austenstone/terraform-actions-data-stream/issues/12) — Event Hubs sends
-  over the 2014-era Service Bus REST API with no partition key, so events land round-robin and
-  per-run ordering is impossible.
-- [#14](https://github.com/austenstone/terraform-actions-data-stream/issues/14) — **you get two
-  sinks per org.** The third create returns `429 Too Many Requests` with an HTML body, so it reads
-  as a rate limit and no amount of backoff clears it. Delete a sink and the next create succeeds
-  instantly. Budget your two slots before you start.
-- [#15](https://github.com/austenstone/terraform-actions-data-stream/issues/15) — **Test connection
-  writes a real row into your destination**, as an undocumented sixth event type
-  `test_connection`. Filter `eventType != "test_connection"` in any raw-table query.
-- [#16](https://github.com/austenstone/terraform-actions-data-stream/issues/16) — **sink
-  create/update/delete is not written to the audit log at all**, and sinks carry no
-  `created_at`/`updated_at`/`created_by`. An org-wide egress path can be added, repointed, or
-  removed with no attributable record anywhere. Worth knowing before a security review asks.
-- [#17](https://github.com/austenstone/terraform-actions-data-stream/issues/17) — **every skipped
-  job emits its `workflow_job_completed` with an earlier `eventTimestamp` than its own
-  `workflow_job_created`**. 100% of skipped jobs, 0% of success/failure. The skew is only 10-50ms,
-  but a causal filter like `completed >= created` silently drops every skipped job — about a third
-  of all job rows.
-- [#18](https://github.com/austenstone/terraform-actions-data-stream/issues/18) — **workflow runs on
-  pull requests opened by coding agents are gated at `action_required` and never emit
-  `workflow_run_completed`.** They're held for manual approval, so zero jobs dispatch — the exact
-  path in [#8](https://github.com/austenstone/terraform-actions-data-stream/issues/8). The run is
-  announced but never closes, so anything joining `created` → `completed` accumulates phantom open
-  runs at ~1% of volume, permanently. This one grows with Copilot coding agent adoption. See
-  [Is it complete?](#is-it-complete).
-- [#19](https://github.com/austenstone/terraform-actions-data-stream/issues/19) — **a sink never
-  recovers from a destination outage.** Break the destination for 11 minutes and the sink stops
-  delivering *permanently*: 79% of events lost, loss continuing 13 minutes after the destination was
-  healthy again, and no resumption until a human `PATCH`es the config. `status` reads `"active"` the
-  entire time. This is the operational one to plan for — see [Operating it](#operating-it).
+issues — worth a skim before you spend an afternoon debugging something that isn't your fault. The
+ones that affect how you *operate* a sink are called out in context below and in
+[Operating it](#operating-it).
 
 Plans and next steps are in
 [#7](https://github.com/austenstone/terraform-actions-data-stream/issues/7).
